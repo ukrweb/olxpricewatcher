@@ -9,6 +9,7 @@ use App\Domain\Price\PriceFetchException;
 use App\Infrastructure\Olx\OlxHttpClient;
 use LogicException;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 use RuntimeException;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -44,7 +45,7 @@ final class OlxHttpClientTest extends TestCase
             return new MockResponse('<html>ok</html>', ['http_code' => 200]);
         });
 
-        $client = new OlxHttpClient($httpClient, 7, 'test-agent');
+        $client = new OlxHttpClient($httpClient, 7, 'test-agent', new NullLogger());
 
         self::assertSame('<html>ok</html>', $client->get('https://www.olx.ua/listing-IDabc123.html'));
     }
@@ -55,6 +56,7 @@ final class OlxHttpClientTest extends TestCase
             new MockHttpClient(new MockResponse('missing', ['http_code' => 404])),
             5,
             'test-agent',
+            new NullLogger(),
         );
 
         try {
@@ -63,6 +65,27 @@ final class OlxHttpClientTest extends TestCase
         } catch (PriceFetchException $exception) {
             self::assertSame(ListingStatus::NotFound, $exception->listingStatus);
             self::assertSame('OLX listing returned HTTP 404.', $exception->getMessage());
+        } catch (ClientExceptionInterface $e) {
+        } catch (RedirectionExceptionInterface $e) {
+        } catch (ServerExceptionInterface $e) {
+        }
+    }
+
+    public function testHttp410MapsToListingNotFound(): void
+    {
+        $client = new OlxHttpClient(
+            new MockHttpClient(new MockResponse('gone', ['http_code' => 410])),
+            5,
+            'test-agent',
+            new NullLogger(),
+        );
+
+        try {
+            $client->get('https://www.olx.ua/gone-IDabc123.html');
+            self::fail('Expected PriceFetchException.');
+        } catch (PriceFetchException $exception) {
+            self::assertSame(ListingStatus::NotFound, $exception->listingStatus);
+            self::assertSame('OLX listing returned HTTP 410.', $exception->getMessage());
         } catch (ClientExceptionInterface $e) {
         } catch (RedirectionExceptionInterface $e) {
         } catch (ServerExceptionInterface $e) {
@@ -80,6 +103,7 @@ final class OlxHttpClientTest extends TestCase
             new MockHttpClient(new MockResponse('error', ['http_code' => 503])),
             5,
             'test-agent',
+            new NullLogger(),
         );
 
         $this->expectException(PriceFetchException::class);
@@ -117,7 +141,7 @@ final class OlxHttpClientTest extends TestCase
             }
         };
 
-        $client = new OlxHttpClient($httpClient, 5, 'test-agent');
+        $client = new OlxHttpClient($httpClient, 5, 'test-agent', new NullLogger());
 
         $this->expectException(PriceFetchException::class);
         $this->expectExceptionMessage('Network error while fetching OLX listing: timeout');

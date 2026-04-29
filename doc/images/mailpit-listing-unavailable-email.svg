@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1130" height="635" viewBox="0 0 1130 635" role="img" aria-labelledby="title desc">
+  <title id="title">Mailpit listing unavailable email</title>
+  <desc id="desc">Mailpit email preview showing that an OLX listing is no longer available.</desc>
+  <rect width="1130" height="635" fill="#ffffff"/>
+  <rect width="1130" height="51" fill="#2f4358"/>
+  <g font-family="Arial, sans-serif" font-size="16" fill="#ffffff">
+    <rect x="9" y="6" width="82" height="37" rx="4" fill="none" stroke="#ffffff"/>
+    <text x="24" y="30">↩ Back</text>
+    <rect x="109" y="6" width="139" height="37" rx="4" fill="none" stroke="#ffffff"/>
+    <text x="122" y="30">◉ Mark unread</text>
+    <rect x="256" y="6" width="95" height="37" rx="4" fill="none" stroke="#ffffff"/>
+    <text x="271" y="30">▥ Delete</text>
+    <rect x="894" y="6" width="129" height="37" rx="4" fill="none" stroke="#ffffff"/>
+    <text x="910" y="30">⬇ Download⌄</text>
+    <rect x="1032" y="6" width="42" height="37" rx="4" fill="#43566b" stroke="#ffffff" opacity="0.7"/>
+    <text x="1047" y="30">◀</text>
+    <rect x="1078" y="6" width="42" height="37" rx="4" fill="#2f4358" stroke="#ffffff"/>
+    <text x="1093" y="30">▶</text>
+  </g>
+  <g font-family="Arial, sans-serif" font-size="14" fill="#000000">
+    <text x="6" y="82">From</text>
+    <text x="126" y="82">&lt;no-reply@example.com&gt;</text>
+    <text x="6" y="108">To</text>
+    <text x="126" y="108">&lt;subscriber@example.com&gt;</text>
+    <text x="6" y="134">Subject</text>
+    <text x="126" y="134" font-weight="700">Оголошення OLX більше не доступне</text>
+    <text x="6" y="160">Date</text>
+    <text x="126" y="160">Fri, 15 May 2026, 7:53 pm</text>
+    <text x="297" y="160">(3.4 kB)</text>
+    <text x="6" y="181">Tags</text>
+    <text x="126" y="181" fill="#6d7c88">Add tags...</text>
+  </g>
+  <line x1="0" y1="245" x2="1130" y2="245" stroke="#d3dbe3"/>
+  <g font-family="Arial, sans-serif" font-size="16">
+    <rect x="5" y="203" width="49" height="42" rx="5" fill="#ffffff" stroke="#d3dbe3"/>
+    <text x="18" y="231" fill="#000000">Text</text>
+    <text x="66" y="231" fill="#002c59">Headers</text>
+    <text x="139" y="231" fill="#002c59">Raw</text>
+    <text x="197" y="231" fill="#002c59">Checks⌄</text>
+  </g>
+  <g font-family="'Courier New', monospace" font-size="14" fill="#000000">
+    <text x="5" y="276">Вітаємо,</text>
+    <text x="5" y="316">Ви підписані на відстеження цього оголошення OLX через olxPriceWatcher:</text>
+    <text x="5" y="356">Оголошення: Верхня кришка клавіатури Acer Aspire 5 A515-54G-56DQ</text>
+    <text x="5" y="380">URL: https://www.olx.ua/d/uk/obyavlenie/verhnya-krishka-klaviaturi-acer-aspire-5-a515-54g-56dq-ID10nAPv.html</text>
+    <text x="5" y="424">Система не змогла знайти це оголошення на OLX після 2 послідовних перевірок.</text>
+    <text x="5" y="448">Можливо, його продали, видалили або воно тимчасово недоступне.</text>
+    <text x="5" y="488">Поки оголошення недоступне, нові повідомлення про зміну ціни не надсилатимуться.</text>
+    <text x="5" y="512">Якщо оголошення знову стане доступним, відстеження може відновитися автоматично.</text>
+    <text x="5" y="552">Якщо ви не підписувалися на це відстеження, просто проігноруйте цей лист.</text>
+    <text x="5" y="604">olxPriceWatcher</text>
+  </g>
+</svg>

@@ -13,6 +13,8 @@
     <env name="DATABASE_URL" value="postgresql://app:app@database:5432/olx_price_watcher?serverVersion=16&amp;charset=utf8"/>
     <env name="MAILER_DSN" value="null://null"/>
     <env name="MAIL_FROM" value="no-reply@example.com"/>
+    <env name="LOCALE" value="ua"/>
+    <env name="EMAIL_RATE_LIMIT_SECONDS" value="60"/>
     <env name="OLX_CHECK_INTERVAL_FROM_SECONDS" value="300"/>
     <env name="OLX_CHECK_INTERVAL_TO_SECONDS" value="600"/>
     <env name="OLX_UNAVAILABLE_NOTIFICATION_THRESHOLD" value="20"/>

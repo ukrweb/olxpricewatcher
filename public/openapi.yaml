@@ -7,7 +7,7 @@ paths:
   /api/subscriptions:
     post:
       summary: Create a pending subscription
-      description: Accepts an OLX listing URL and email address, stores a pending subscription, and sends a confirmation email.
+      description: Accepts an OLX listing URL and email address, stores a pending subscription only when not throttled, and sends a confirmation email when the per-recipient throttle allows it.
       requestBody:
         required: true
         content:
@@ -33,6 +33,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Confirmation email rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiMessageResponse'
+              example:
+                status: confirmation_throttled
+                message: A confirmation email was recently sent. Please wait before requesting another one.
         '404':
           description: OLX listing was not found.
           content:
@@ -46,11 +55,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '502':
-          description: OLX fetch or network error.
+          description: Upstream OLX fetch failure or confirmation email transport failure.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                upstream_fetch_failure:
+                  value:
+                    status: error
+                    message: Unable to fetch OLX listing price.
+                email_transport_failure:
+                  value:
+                    status: error
+                    message: Unable to send confirmation email.
         '500':
           description: Unexpected storage or application error.
           content:

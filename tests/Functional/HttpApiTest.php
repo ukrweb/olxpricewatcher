@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Tests\Functional;
 
+use App\Application\Notification\NotificationFailedException;
+use App\Application\Notification\NotifierInterface;
 use App\Domain\Listing\Listing;
 use App\Domain\Listing\ListingRepositoryInterface;
 use App\Domain\Listing\ListingStatus;
@@ -18,6 +20,7 @@ use App\Tests\Support\MutableClock;
 use App\Tests\Support\ThrowingListingRepository;
 use App\Tests\Support\ThrowingSubscriptionRepository;
 use DateMalformedStringException;
+use RuntimeException;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 final class HttpApiTest extends WebTestCase
@@ -116,6 +119,145 @@ final class HttpApiTest extends WebTestCase
             'pending_confirmation',
             json_decode((string) $client->getResponse()->getContent(), true)['status'] ?? null,
         );
+    }
+
+    public function testDuplicatePendingSubscriptionWithinRateLimitReturnsClearJsonResponse(): void
+    {
+        $client = self::createClient();
+        $client->disableReboot();
+        $payload = json_encode([
+            'url' => 'https://m.olx.ua/d/uk/obyavlenie/rate-limit-IDlimit123.html',
+            'email' => 'rate-limit@example.com',
+        ]) ?: '';
+
+        $client->request('POST', '/api/subscriptions', [], [], ['CONTENT_TYPE' => 'application/json'], $payload);
+        self::assertResponseStatusCodeSame(201);
+
+        $client->request('POST', '/api/subscriptions', [], [], ['CONTENT_TYPE' => 'application/json'], $payload);
+
+        self::assertResponseStatusCodeSame(429);
+        self::assertResponseHeaderSame('content-type', 'application/json');
+        self::assertSame(
+            [
+                'status' => 'confirmation_throttled',
+                'message' => 'A confirmation email was recently sent. Please wait before requesting another one.',
+            ],
+            json_decode((string) $client->getResponse()->getContent(), true),
+        );
+
+        $subscriptionRepository = self::getContainer()->get(InMemorySubscriptionRepository::class);
+        self::assertInstanceOf(InMemorySubscriptionRepository::class, $subscriptionRepository);
+        self::assertCount(1, $subscriptionRepository->subscriptions);
+        $priceFetcher = self::getContainer()->get(PriceFetcherInterface::class);
+        self::assertInstanceOf(ConfigurablePriceFetcher::class, $priceFetcher);
+        self::assertSame(1, $priceFetcher->calls);
+    }
+
+    public function testThrottledRequestForDifferentListingDoesNotCreateNewSubscription(): void
+    {
+        $client = self::createClient();
+        $client->disableReboot();
+        $email = 'global-throttle@example.com';
+
+        $client->request(
+            'POST',
+            '/api/subscriptions',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json'],
+            json_encode([
+                'url' => 'https://m.olx.ua/d/uk/obyavlenie/first-IDfirst123.html',
+                'email' => $email,
+            ]) ?: '',
+        );
+        self::assertResponseStatusCodeSame(201);
+
+        $client->request(
+            'POST',
+            '/api/subscriptions',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json'],
+            json_encode([
+                'url' => 'https://m.olx.ua/d/uk/obyavlenie/second-IDsecond456.html',
+                'email' => $email,
+            ]) ?: '',
+        );
+
+        self::assertResponseStatusCodeSame(429);
+        self::assertSame(
+            [
+                'status' => 'confirmation_throttled',
+                'message' => 'A confirmation email was recently sent. Please wait before requesting another one.',
+            ],
+            json_decode((string) $client->getResponse()->getContent(), true),
+        );
+
+        $subscriptionRepository = self::getContainer()->get(InMemorySubscriptionRepository::class);
+        self::assertInstanceOf(InMemorySubscriptionRepository::class, $subscriptionRepository);
+        self::assertCount(1, $subscriptionRepository->subscriptions);
+        $listingRepository = self::getContainer()->get(InMemoryListingRepository::class);
+        self::assertInstanceOf(InMemoryListingRepository::class, $listingRepository);
+        self::assertCount(1, $listingRepository->listings);
+        $priceFetcher = self::getContainer()->get(PriceFetcherInterface::class);
+        self::assertInstanceOf(ConfigurablePriceFetcher::class, $priceFetcher);
+        self::assertSame(1, $priceFetcher->calls);
+    }
+
+    public function testMailTransportFailureReturnsSafeBadGatewayJson(): void
+    {
+        $client = self::createClient();
+        self::getContainer()->set(NotifierInterface::class, new AlwaysFailingNotifier());
+
+        $client->request(
+            'POST',
+            '/api/subscriptions',
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json'],
+            json_encode([
+                'url' => 'https://m.olx.ua/d/uk/obyavlenie/mail-failure-IDmail502.html',
+                'email' => 'mail-failure@example.com',
+            ]) ?: '',
+        );
+
+        $body = (string) $client->getResponse()->getContent();
+
+        self::assertResponseStatusCodeSame(502);
+        self::assertResponseHeaderSame('content-type', 'application/json');
+        self::assertSame(
+            ['status' => 'error', 'message' => 'Unable to send confirmation email.'],
+            json_decode($body, true),
+        );
+        self::assertStringNotContainsString('smtp://secret:password@example.com', $body);
+        self::assertStringNotContainsString('provider rejected credentials', $body);
+    }
+
+    public function testRetryAfterMailFailureReusesSubscriptionAndAttemptsSendingAgain(): void
+    {
+        $client = self::createClient();
+        $client->disableReboot();
+        $notifier = new FailOnceNotifier();
+        self::getContainer()->set(NotifierInterface::class, $notifier);
+        $payload = json_encode([
+            'url' => 'https://m.olx.ua/d/uk/obyavlenie/retry-mail-IDretry502.html',
+            'email' => 'retry-mail@example.com',
+        ]) ?: '';
+
+        $client->request('POST', '/api/subscriptions', [], [], ['CONTENT_TYPE' => 'application/json'], $payload);
+        self::assertResponseStatusCodeSame(502);
+
+        $subscriptionRepository = self::getContainer()->get(InMemorySubscriptionRepository::class);
+        self::assertInstanceOf(InMemorySubscriptionRepository::class, $subscriptionRepository);
+        self::assertCount(1, $subscriptionRepository->subscriptions);
+        self::assertNull($subscriptionRepository->subscriptions[0]->getLastEmailSentAt());
+
+        $client->request('POST', '/api/subscriptions', [], [], ['CONTENT_TYPE' => 'application/json'], $payload);
+
+        self::assertResponseStatusCodeSame(200);
+        self::assertCount(1, $subscriptionRepository->subscriptions);
+        self::assertSame(2, $notifier->attempts);
+        self::assertNotNull($subscriptionRepository->subscriptions[0]->getLastEmailSentAt());
     }
 
     public function testCreateSubscriptionAcceptsEmailStartingWithDigit(): void
@@ -235,6 +377,61 @@ final class HttpApiTest extends WebTestCase
         self::assertStringNotContainsString('OLX_CHECK_INTERVAL_SECONDS', $workerScript);
     }
 
+    public function testDocsAndConfigUseLocaleVariable(): void
+    {
+        $projectDir = dirname(__DIR__, 2);
+        $paths = [
+            '/.env.example',
+            '/config/services.yaml',
+            '/docker-compose.yml',
+            '/README.md',
+            '/README-en.md',
+            '/CLAUDE.md',
+        ];
+        $docFiles = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($projectDir . '/doc'));
+        foreach ($docFiles as $docFile) {
+            if ($docFile->isFile() && $docFile->getExtension() === 'md') {
+                $paths[] = mb_substr($docFile->getPathname(), mb_strlen($projectDir));
+            }
+        }
+
+        foreach ($paths as $path) {
+            $contents = (string) file_get_contents($projectDir . $path);
+            self::assertStringNotContainsString('EMAIL_' . 'LOCALE', $contents, $path);
+        }
+
+        self::assertStringContainsString('LOCALE=ua', (string) file_get_contents($projectDir . '/.env.example'));
+    }
+
+    public function testOpenApiDocumentsConfirmationThrottleResponse(): void
+    {
+        $openApi = (string) file_get_contents(dirname(__DIR__, 2) . '/public/openapi.yaml');
+
+        self::assertStringContainsString("'429':", $openApi);
+        self::assertStringContainsString('Confirmation email rate limit exceeded.', $openApi);
+        self::assertStringContainsString('status: confirmation_throttled', $openApi);
+        self::assertStringContainsString("'502':", $openApi);
+        self::assertStringContainsString('Unable to send confirmation email.', $openApi);
+        self::assertStringContainsString(
+            'Upstream OLX fetch failure or confirmation email transport failure.',
+            $openApi,
+        );
+    }
+
+    public function testReadmeFilesLinkToMatchingDocumentationFiles(): void
+    {
+        $projectDir = dirname(__DIR__, 2);
+        $ukrainianReadme = (string) file_get_contents($projectDir . '/README.md');
+        $englishReadme = (string) file_get_contents($projectDir . '/README-en.md');
+
+        self::assertStringContainsString('doc/olxpricewatcher.md', $ukrainianReadme);
+        self::assertStringNotContainsString('doc/olxpricewatcher-en.md', $ukrainianReadme);
+        self::assertStringContainsString('doc/olxpricewatcher-en.md', $englishReadme);
+        self::assertStringNotContainsString('doc/olxpricewatcher.md)', $englishReadme);
+        self::assertFileExists($projectDir . '/doc/olxpricewatcher.md');
+        self::assertFileExists($projectDir . '/doc/olxpricewatcher-en.md');
+    }
+
     public function testMigrationAddsUniqueConfirmationTokenIndex(): void
     {
         $migrationSql = '';
@@ -246,6 +443,7 @@ final class HttpApiTest extends WebTestCase
             'CREATE UNIQUE INDEX uniq_subscriptions_confirmation_token',
             $migrationSql,
         );
+        self::assertStringContainsString('last_email_sent_at', $migrationSql);
     }
 
     public function testConfirmSubscriptionWithInvalidTokenReturnsNotFound(): void
@@ -385,5 +583,66 @@ final class HttpApiTest extends WebTestCase
         }
 
         self::fail(sprintf('Subscription for %s was not found.', $email));
+    }
+}
+
+final class AlwaysFailingNotifier implements NotifierInterface
+{
+    public function sendSubscriptionConfirmation(Subscription $subscription): void
+    {
+        throw new NotificationFailedException(
+            'Mailer transport failed.',
+            0,
+            new RuntimeException('smtp://secret:password@example.com provider rejected credentials'),
+        );
+    }
+
+    public function sendPriceChanged(
+        Listing $listing,
+        ?int $oldPrice,
+        int $newPrice,
+        string $currency,
+        array $subscriptions,
+    ): void {
+    }
+
+    public function sendListingUnavailable(Listing $listing, array $subscriptions): void
+    {
+    }
+}
+
+final class FailOnceNotifier implements NotifierInterface
+{
+    public int $attempts = 0;
+
+    /** @var list<Subscription> */
+    public array $confirmations = [];
+
+    public function sendSubscriptionConfirmation(Subscription $subscription): void
+    {
+        ++$this->attempts;
+
+        if ($this->attempts === 1) {
+            throw new NotificationFailedException(
+                'Mailer transport failed.',
+                0,
+                new RuntimeException('smtp://secret:password@example.com provider rejected credentials'),
+            );
+        }
+
+        $this->confirmations[] = $subscription;
+    }
+
+    public function sendPriceChanged(
+        Listing $listing,
+        ?int $oldPrice,
+        int $newPrice,
+        string $currency,
+        array $subscriptions,
+    ): void {
+    }
+
+    public function sendListingUnavailable(Listing $listing, array $subscriptions): void
+    {
     }
 }

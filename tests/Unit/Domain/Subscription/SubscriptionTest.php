@@ -62,6 +62,20 @@ final class SubscriptionTest extends TestCase
         self::assertSame($now, $lastNotifiedAt->getValue($subscription));
     }
 
+    public function testEmailRateLimitUsesLastEmailSentAt(): void
+    {
+        $now = new \DateTimeImmutable('2026-04-27 10:00:00');
+        $subscription = $this->subscription($now);
+
+        self::assertTrue($subscription->canSendEmail($now, 60));
+
+        $subscription->markEmailSent($now);
+
+        self::assertSame($now, $subscription->getLastEmailSentAt());
+        self::assertFalse($subscription->canSendEmail($now->modify('+59 seconds'), 60));
+        self::assertTrue($subscription->canSendEmail($now->modify('+60 seconds'), 60));
+    }
+
     private function subscription(\DateTimeImmutable $now): Subscription
     {
         $listing = new Listing(

@@ -13,11 +13,19 @@ final class ConfigurablePriceFetcher implements PriceFetcherInterface
     /** @var array<string, PriceFetchResult|Throwable> */
     private array $results = [];
 
+    /** @var list<string> */
+    public array $fetchedUrls = [];
+
+    public int $calls = 0;
+
     /**
      * @throws Throwable
      */
     public function fetch(string $url): PriceFetchResult
     {
+        ++$this->calls;
+        $this->fetchedUrls[] = $url;
+
         $result = $this->results[$url] ?? PriceFetchResult::found(
             1000,
             'UAH',
@@ -40,5 +48,7 @@ final class ConfigurablePriceFetcher implements PriceFetcherInterface
     public function clear(): void
     {
         $this->results = [];
+        $this->fetchedUrls = [];
+        $this->calls = 0;
     }
 }

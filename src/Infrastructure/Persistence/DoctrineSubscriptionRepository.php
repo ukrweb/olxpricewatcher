@@ -7,6 +7,7 @@ namespace App\Infrastructure\Persistence;
 use App\Domain\Listing\Listing;
 use App\Domain\Subscription\Subscription;
 use App\Domain\Subscription\SubscriptionRepositoryInterface;
+use DateTimeImmutable;
 use Doctrine\ORM\EntityManagerInterface;
 
 final readonly class DoctrineSubscriptionRepository implements SubscriptionRepositoryInterface
@@ -34,6 +35,24 @@ final readonly class DoctrineSubscriptionRepository implements SubscriptionRepos
         return $this->entityManager->getRepository(Subscription::class)->findOneBy([
             'confirmationToken' => $token,
         ]);
+    }
+
+    public function findLatestEmailSentAtByEmail(string $email): ?DateTimeImmutable
+    {
+        $latestEmailSentAt = $this->entityManager->createQueryBuilder()
+            ->select('MAX(s.lastEmailSentAt)')
+            ->from(Subscription::class, 's')
+            ->andWhere('s.email = :email')
+            ->andWhere('s.lastEmailSentAt IS NOT NULL')
+            ->setParameter('email', mb_strtolower($email))
+            ->getQuery()
+            ->getSingleScalarResult();
+
+        if (!is_string($latestEmailSentAt) || $latestEmailSentAt === '') {
+            return null;
+        }
+
+        return new DateTimeImmutable($latestEmailSentAt);
     }
 
     /**

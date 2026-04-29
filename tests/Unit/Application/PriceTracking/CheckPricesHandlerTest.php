@@ -23,6 +23,7 @@ use App\Shared\SleeperInterface;
 use DateMalformedStringException;
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 use Random\RandomException;
 use RuntimeException;
 
@@ -65,6 +66,7 @@ final class CheckPricesHandlerTest extends TestCase
             $notifier,
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             20,
         );
@@ -105,6 +107,7 @@ final class CheckPricesHandlerTest extends TestCase
             $notifier,
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             20,
         );
@@ -137,6 +140,7 @@ final class CheckPricesHandlerTest extends TestCase
             new RecordingNotifier(),
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             20,
         );
@@ -168,6 +172,7 @@ final class CheckPricesHandlerTest extends TestCase
             new RecordingNotifier(),
             $clock,
             $sleeper,
+            new NullLogger(),
             300,
             20,
         );
@@ -204,6 +209,7 @@ final class CheckPricesHandlerTest extends TestCase
             new RecordingNotifier(),
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             20,
         );
@@ -232,6 +238,7 @@ final class CheckPricesHandlerTest extends TestCase
             new RecordingNotifier(),
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             20,
         );
@@ -258,6 +265,7 @@ final class CheckPricesHandlerTest extends TestCase
             new RecordingNotifier(),
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             20,
         );
@@ -285,6 +293,7 @@ final class CheckPricesHandlerTest extends TestCase
             new RecordingNotifier(),
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             20,
         );
@@ -315,6 +324,7 @@ final class CheckPricesHandlerTest extends TestCase
             new RecordingNotifier(),
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             20,
         );
@@ -352,6 +362,7 @@ final class CheckPricesHandlerTest extends TestCase
             $notifier,
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             2,
         );
@@ -396,6 +407,7 @@ final class CheckPricesHandlerTest extends TestCase
             $notifier,
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             2,
         );
@@ -434,6 +446,7 @@ final class CheckPricesHandlerTest extends TestCase
             $notifier,
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             2,
         );
@@ -441,6 +454,76 @@ final class CheckPricesHandlerTest extends TestCase
         $handler(new CheckPricesCommand());
 
         self::assertSame([], $notifier->unavailableSubscriberCounts);
+    }
+
+    /**
+     * @throws DateMalformedStringException
+     * @throws RandomException
+     */
+    public function testHttp410NotFoundAtThresholdNotifiesOnceAndSetsListingNotFound(): void
+    {
+        $clock = new FixedClock(new DateTimeImmutable('2026-04-26 10:00:00'));
+        $listing = new Listing('https://olx.ua/a-ID1.html', 'https://www.olx.ua/a-ID1.html', '1', $clock->now());
+        for ($i = 0; $i < 19; $i++) {
+            $listing->markNotFound('OLX listing returned HTTP 410.', $clock->now(), $clock->now());
+        }
+        $active = new Subscription(
+            $listing,
+            'active@example.com',
+            'active',
+            $clock->now()->modify('+1 hour'),
+            $clock->now(),
+        );
+        $active->confirm($clock->now());
+        $notifier = new RecordingNotifier();
+        $repository = new MultipleListingRepository([$listing]);
+        $subscriptions = new SubscriptionRepository([$active]);
+
+        $handler = new CheckPricesHandler(
+            $repository,
+            $subscriptions,
+            new InMemoryPriceHistoryRepository(),
+            new RecordingPriceFetcher([
+                new PriceFetchException('OLX listing returned HTTP 410.', ListingStatus::NotFound),
+            ]),
+            new PriceChangeDetector(),
+            $notifier,
+            $clock,
+            new NullSleeper(),
+            new NullLogger(),
+            300,
+            20,
+        );
+
+        $handler(new CheckPricesCommand());
+
+        self::assertSame(ListingStatus::NotFound, $listing->getStatus());
+        self::assertSame(20, $listing->getConsecutiveNotFoundCount());
+        self::assertSame(0, $listing->getConsecutiveFetchErrorCount());
+        self::assertSame([1], $notifier->unavailableSubscriberCounts);
+        self::assertSame($clock->now(), $listing->getUnavailableNotifiedAt());
+
+        $secondHandler = new CheckPricesHandler(
+            $repository,
+            $subscriptions,
+            new InMemoryPriceHistoryRepository(),
+            new RecordingPriceFetcher([
+                new PriceFetchException('OLX listing returned HTTP 410.', ListingStatus::NotFound),
+            ]),
+            new PriceChangeDetector(),
+            $notifier,
+            $clock,
+            new NullSleeper(),
+            new NullLogger(),
+            300,
+            20,
+        );
+
+        $secondHandler(new CheckPricesCommand());
+
+        self::assertSame(21, $listing->getConsecutiveNotFoundCount());
+        self::assertSame(0, $listing->getConsecutiveFetchErrorCount());
+        self::assertSame([1], $notifier->unavailableSubscriberCounts);
     }
 
     /**
@@ -481,6 +564,7 @@ final class CheckPricesHandlerTest extends TestCase
             $notifier,
             $clock,
             new NullSleeper(),
+            new NullLogger(),
             300,
             1,
         );
@@ -610,6 +694,11 @@ final readonly class SubscriptionRepository implements SubscriptionRepositoryInt
     }
 
     public function findByConfirmationToken(string $token): ?Subscription
+    {
+        return null;
+    }
+
+    public function findLatestEmailSentAtByEmail(string $email): ?DateTimeImmutable
     {
         return null;
     }

@@ -1,6 +1,9 @@
 parameters:
   project_name: '%env(PROJECT_NAME)%'
   mail_from: '%env(MAIL_FROM)%'
+  locale: '%env(default:default_locale:LOCALE)%'
+  default_locale: 'ua'
+  email_rate_limit_seconds: '%env(int:EMAIL_RATE_LIMIT_SECONDS)%'
   app_base_url: '%env(APP_BASE_URL)%'
   olx_check_interval_to_seconds: '%env(int:OLX_CHECK_INTERVAL_TO_SECONDS)%'
   olx_unavailable_notification_threshold: '%env(int:OLX_UNAVAILABLE_NOTIFICATION_THRESHOLD)%'
@@ -22,6 +25,7 @@ services:
   App\Domain\Price\PriceFetcherInterface: '@App\Infrastructure\Olx\OlxCompositePriceFetcher'
   App\Application\PriceTracking\PriceHistoryRepositoryInterface: '@App\Infrastructure\Persistence\DoctrinePriceHistoryRepository'
   App\Application\Notification\NotifierInterface: '@App\Infrastructure\Mail\SymfonyEmailNotifier'
+  App\Infrastructure\Mail\EmailTemplateRendererInterface: '@App\Infrastructure\Mail\SymfonyEmailTemplateRenderer'
   App\Shared\ClockInterface: '@App\Shared\SystemClock'
   App\Shared\SleeperInterface: '@App\Shared\NativeSleeper'
 
@@ -35,6 +39,10 @@ services:
       $confirmationTtlHours: '%subscription_confirmation_ttl_hours%'
       $checkIntervalSeconds: '%olx_check_interval_to_seconds%'
 
+  App\Application\Notification\EmailRateLimiter:
+    arguments:
+      $emailRateLimitSeconds: '%email_rate_limit_seconds%'
+
   App\Application\PriceTracking\CheckPricesHandler:
     arguments:
       $checkIntervalSeconds: '%olx_check_interval_to_seconds%'
@@ -42,8 +50,12 @@ services:
 
   App\Infrastructure\Mail\EmailFactory:
     arguments:
-      $projectName: '%project_name%'
       $mailFrom: '%mail_from%'
       $appBaseUrl: '%app_base_url%'
+
+  App\Infrastructure\Mail\SymfonyEmailTemplateRenderer:
+    arguments:
+      $locale: '%locale%'
+      $projectName: '%project_name%'
       $confirmationTtlHours: '%subscription_confirmation_ttl_hours%'
       $unavailableNotificationThreshold: '%olx_unavailable_notification_threshold%'

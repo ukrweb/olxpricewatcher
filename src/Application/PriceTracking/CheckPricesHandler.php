@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Application\PriceTracking;
 
+use App\Application\Notification\NotificationFailedException;
 use App\Application\Notification\NotifierInterface;
 use App\Domain\Listing\Listing;
 use App\Domain\Listing\ListingRepositoryInterface;
@@ -16,6 +17,7 @@ use App\Shared\ClockInterface;
 use App\Shared\SleeperInterface;
 use DateMalformedStringException;
 use DateTimeImmutable;
+use Psr\Log\LoggerInterface;
 use Random\RandomException;
 use Throwable;
 
@@ -30,6 +32,7 @@ final readonly class CheckPricesHandler
         private NotifierInterface $notifier,
         private ClockInterface $clock,
         private SleeperInterface $sleeper,
+        private LoggerInterface $logger,
         private int $checkIntervalSeconds,
         private int $unavailableNotificationThreshold,
     ) {
@@ -51,11 +54,21 @@ final readonly class CheckPricesHandler
 
         foreach ($listings as $index => $listing) {
             $nextCheckAt = $now->modify(sprintf('+%d seconds', $this->checkIntervalSeconds));
+            $this->logger->info('Checking listing price.', [
+                'listing_id' => $listing->getId(),
+                'url' => $listing->getNormalizedUrl(),
+                'status' => $listing->getStatus()->value,
+            ]);
 
             try {
                 $result = $this->priceFetcher->fetch($listing->getNormalizedUrl());
                 if ($result->price === null) {
                     $listing->markChecked(null, null, $result->title, $result->externalId, $now, $nextCheckAt);
+                    $this->logger->warning('Listing price was not found during worker check.', [
+                        'listing_id' => $listing->getId(),
+                        'url' => $listing->getNormalizedUrl(),
+                        'status' => $listing->getStatus()->value,
+                    ]);
                     $this->listingRepository->save($listing);
                     $processed++;
                     $this->sleepBetweenListings($index, $lastIndex);
@@ -76,17 +89,26 @@ final readonly class CheckPricesHandler
 
                     $activeSubscriptions = $this->subscriptionRepository->findActiveByListing($listing);
                     if ($oldPrice !== null && $activeSubscriptions !== []) {
-                        $this->notifier->sendPriceChanged(
-                            $listing,
-                            $oldPrice,
-                            $result->price->amount,
-                            $result->price->currency,
-                            $activeSubscriptions,
-                        );
+                        try {
+                            $this->notifier->sendPriceChanged(
+                                $listing,
+                                $oldPrice,
+                                $result->price->amount,
+                                $result->price->currency,
+                                $activeSubscriptions,
+                            );
 
-                        foreach ($activeSubscriptions as $subscription) {
-                            $subscription->markNotified($result->price->amount, $now);
-                            $this->subscriptionRepository->save($subscription);
+                            foreach ($activeSubscriptions as $subscription) {
+                                $subscription->markNotified($result->price->amount, $now);
+                                $this->subscriptionRepository->save($subscription);
+                            }
+                        } catch (NotificationFailedException $exception) {
+                            $this->logger->error('Price-change notification failed.', [
+                                'listing_id' => $listing->getId(),
+                                'url' => $listing->getNormalizedUrl(),
+                                'exception_class' => $exception::class,
+                                'exception_message' => $exception->getMessage(),
+                            ]);
                         }
                     }
                 }
@@ -99,6 +121,13 @@ final readonly class CheckPricesHandler
                     $now,
                     $nextCheckAt,
                 );
+                $this->logger->info('Listing check completed.', [
+                    'listing_id' => $listing->getId(),
+                    'url' => $listing->getNormalizedUrl(),
+                    'status' => $listing->getStatus()->value,
+                    'not_found_count' => $listing->getConsecutiveNotFoundCount(),
+                    'fetch_error_count' => $listing->getConsecutiveFetchErrorCount(),
+                ]);
                 $this->listingRepository->save($listing);
                 $processed++;
             } catch (PriceFetchException $exception) {
@@ -108,10 +137,28 @@ final readonly class CheckPricesHandler
                 } else {
                     $listing->markFetchError($exception->getMessage(), $now, $nextCheckAt);
                 }
+                $this->logger->warning('Listing check failed with price fetch exception.', [
+                    'listing_id' => $listing->getId(),
+                    'url' => $listing->getNormalizedUrl(),
+                    'status' => $listing->getStatus()->value,
+                    'not_found_count' => $listing->getConsecutiveNotFoundCount(),
+                    'fetch_error_count' => $listing->getConsecutiveFetchErrorCount(),
+                    'exception_class' => $exception::class,
+                    'exception_message' => $exception->getMessage(),
+                ]);
                 $this->listingRepository->save($listing);
                 $processed++;
             } catch (Throwable $exception) {
                 $listing->markFetchError($exception->getMessage(), $now, $nextCheckAt);
+                $this->logger->error('Unexpected listing check failure.', [
+                    'listing_id' => $listing->getId(),
+                    'url' => $listing->getNormalizedUrl(),
+                    'status' => $listing->getStatus()->value,
+                    'not_found_count' => $listing->getConsecutiveNotFoundCount(),
+                    'fetch_error_count' => $listing->getConsecutiveFetchErrorCount(),
+                    'exception_class' => $exception::class,
+                    'exception_message' => $exception->getMessage(),
+                ]);
                 $this->listingRepository->save($listing);
                 $processed++;
             }
@@ -151,7 +198,16 @@ final readonly class CheckPricesHandler
             return;
         }
 
-        $this->notifier->sendListingUnavailable($listing, $activeSubscriptions);
-        $listing->markUnavailableNotified($now);
+        try {
+            $this->notifier->sendListingUnavailable($listing, $activeSubscriptions);
+            $listing->markUnavailableNotified($now);
+        } catch (NotificationFailedException $exception) {
+            $this->logger->error('Unavailable-listing notification failed.', [
+                'listing_id' => $listing->getId(),
+                'url' => $listing->getNormalizedUrl(),
+                'exception_class' => $exception::class,
+                'exception_message' => $exception->getMessage(),
+            ]);
+        }
     }
 }

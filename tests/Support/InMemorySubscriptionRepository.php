@@ -7,6 +7,7 @@ namespace App\Tests\Support;
 use App\Domain\Listing\Listing;
 use App\Domain\Subscription\Subscription;
 use App\Domain\Subscription\SubscriptionRepositoryInterface;
+use DateTimeImmutable;
 
 final class InMemorySubscriptionRepository implements SubscriptionRepositoryInterface
 {
@@ -36,6 +37,29 @@ final class InMemorySubscriptionRepository implements SubscriptionRepositoryInte
         }
 
         return null;
+    }
+
+    public function findLatestEmailSentAtByEmail(string $email): ?DateTimeImmutable
+    {
+        $normalizedEmail = mb_strtolower($email);
+        $latest = null;
+
+        foreach ($this->subscriptions as $subscription) {
+            if ($subscription->getEmail() !== $normalizedEmail) {
+                continue;
+            }
+
+            $sentAt = $subscription->getLastEmailSentAt();
+            if ($sentAt === null) {
+                continue;
+            }
+
+            if ($latest === null || $sentAt > $latest) {
+                $latest = $sentAt;
+            }
+        }
+
+        return $latest;
     }
 
     public function findActiveByListing(Listing $listing): array

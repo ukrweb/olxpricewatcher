@@ -8,6 +8,8 @@ use App\Infrastructure\Olx\OlxCompositePriceFetcher;
 use App\Infrastructure\Olx\OlxHtmlPriceExtractor;
 use App\Infrastructure\Olx\OlxHttpClient;
 use App\Infrastructure\Olx\OlxJsonLdPriceExtractor;
+use App\Infrastructure\Olx\OlxPrerenderedStatePriceExtractor;
+use Psr\Log\NullLogger;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -21,6 +23,47 @@ final class OlxCompositePriceFetcherTest extends TestCase
 {"@type":"Product","name":"Json item","offers":{"price":"100","priceCurrency":"UAH"}}
 </script>
 <div data-testid="ad-price">200 грн.</div>
+HTML;
+
+        $fetcher = $this->fetcherForHtml($html);
+
+        $result = $fetcher->fetch('https://www.olx.ua/item-IDabc123.html');
+
+        self::assertNotNull($result->price);
+        self::assertSame(100, $result->price->amount);
+        self::assertSame('json_ld', $result->source);
+    }
+
+    public function testUsesPrerenderedStateBeforeJsonLdAndHtmlFallback(): void
+    {
+        $html = <<<'HTML'
+<script>
+window.__PRERENDERED_STATE__ = {
+  "ad": {"ad": {"title": "State item", "price": {"regularPrice": {"value": 50, "currencyCode": "UAH"}}}}
+};
+</script>
+<script type="application/ld+json">
+{"@type":"Product","name":"Json item","offers":{"price":"100","priceCurrency":"UAH"}}
+</script>
+<div data-testid="ad-price">200 грн.</div>
+HTML;
+
+        $fetcher = $this->fetcherForHtml($html);
+
+        $result = $fetcher->fetch('https://www.olx.ua/item-IDabc123.html');
+
+        self::assertNotNull($result->price);
+        self::assertSame(50, $result->price->amount);
+        self::assertSame('prerendered_state', $result->source);
+    }
+
+    public function testFallsBackToJsonLdWhenPrerenderedStateHasNoPrice(): void
+    {
+        $html = <<<'HTML'
+<script>window.__PRERENDERED_STATE__ = {"ad":{"ad":{"title":"No state price"}}};</script>
+<script type="application/ld+json">
+{"@type":"Product","name":"Json item","offers":{"price":"100","priceCurrency":"UAH"}}
+</script>
 HTML;
 
         $fetcher = $this->fetcherForHtml($html);
@@ -57,15 +100,20 @@ HTML;
 
         self::assertNull($result->price);
         self::assertSame('none', $result->source);
-        self::assertSame('Price was not found in JSON-LD or supported HTML selectors.', $result->error);
+        self::assertSame(
+            'Price was not found in PRERENDERED_STATE, JSON-LD, or supported HTML selectors.',
+            $result->error,
+        );
     }
 
     private function fetcherForHtml(string $html): OlxCompositePriceFetcher
     {
         return new OlxCompositePriceFetcher(
-            new OlxHttpClient(new MockHttpClient(new MockResponse($html)), 5, 'test-agent'),
+            new OlxHttpClient(new MockHttpClient(new MockResponse($html)), 5, 'test-agent', new NullLogger()),
+            new OlxPrerenderedStatePriceExtractor(),
             new OlxJsonLdPriceExtractor(),
             new OlxHtmlPriceExtractor(),
+            new NullLogger(),
         );
     }
 }

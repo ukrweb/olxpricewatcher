@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Infrastructure\Mail;
 
+use App\Application\Notification\NotificationMessage;
 use App\Domain\Listing\Listing;
 use App\Domain\Subscription\Subscription;
 use App\Infrastructure\Mail\EmailFactory;
+use App\Infrastructure\Mail\EmailTemplateRendererInterface;
 use DateMalformedStringException;
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
@@ -16,79 +18,24 @@ final class EmailFactoryTest extends TestCase
     /**
      * @throws DateMalformedStringException
      */
-    public function testConfirmationEmailContainsClearSubscriptionContext(): void
+    public function testDelegatesRenderingAndSetsSenderAndRecipient(): void
+    {
+        $renderer = new RecordingEmailTemplateRenderer();
+        $factory = new EmailFactory($renderer, 'no-reply@example.com', 'http://localhost:8000/');
+        $subscription = $this->subscription($this->listing());
+
+        $email = $factory->confirmationEmail($subscription);
+
+        self::assertSame('Rendered subject', $email->getSubject());
+        self::assertSame("Rendered body\n", $email->getTextBody());
+        self::assertSame('no-reply@example.com', $email->getFrom()[0]->getAddress());
+        self::assertSame('subscriber@example.com', $email->getTo()[0]->getAddress());
+        self::assertSame('http://localhost:8000/api/subscriptions/confirm/confirm-token', $renderer->confirmationUrl);
+    }
+
+    private function listing(): Listing
     {
         $now = new DateTimeImmutable('2026-04-27 10:00:00');
-        $listing = $this->listing($now);
-        $subscription = new Subscription(
-            $listing,
-            'subscriber@example.com',
-            'confirm-token',
-            $now->modify('+24 hours'),
-            $now,
-        );
-
-        $email = $this->factory()->confirmationEmail($subscription);
-        $body = (string) $email->getTextBody();
-
-        self::assertSame('Підтвердіть підписку в TestProject', $email->getSubject());
-        self::assertStringContainsString('TestProject', $body);
-        self::assertStringContainsString('Оголошення: Test chair', $body);
-        self::assertStringContainsString('URL: https://www.olx.ua/d/uk/obyavlenie/test-IDmail123.html', $body);
-        self::assertStringContainsString('Email-адреса: subscriber@example.com', $body);
-        self::assertStringContainsString('http://localhost:8000/api/subscriptions/confirm/confirm-token', $body);
-        self::assertStringContainsString('просто проігноруйте цей лист', $body);
-        self::assertStringContainsString('діє 24 годин', $body);
-    }
-
-    /**
-     * @throws DateMalformedStringException
-     */
-    public function testPriceChangedEmailContainsReadablePriceChangeContext(): void
-    {
-        $now = new DateTimeImmutable('2026-04-27 10:00:00');
-        $listing = $this->listing($now);
-        $subscription = new Subscription($listing, 'subscriber@example.com', 'token', $now->modify('+1 hour'), $now);
-
-        $email = $this->factory()->priceChangedEmail($subscription, $listing, 1000, 900, 'UAH');
-        $body = (string) $email->getTextBody();
-
-        self::assertSame('Зміна ціни OLX: Test chair', $email->getSubject());
-        self::assertStringContainsString('TestProject', $body);
-        self::assertStringContainsString('Оголошення: Test chair', $body);
-        self::assertStringContainsString('URL: https://www.olx.ua/d/uk/obyavlenie/test-IDmail123.html', $body);
-        self::assertStringContainsString('Стара ціна: 1000 UAH', $body);
-        self::assertStringContainsString('Нова ціна: 900 UAH', $body);
-        self::assertStringContainsString('Якщо ви не підписувалися на це відстеження', $body);
-    }
-
-    /**
-     * @throws DateMalformedStringException
-     */
-    public function testUnavailableEmailContainsThresholdAndIgnoreText(): void
-    {
-        $now = new DateTimeImmutable('2026-04-27 10:00:00');
-        $listing = $this->listing($now);
-        $subscription = new Subscription($listing, 'subscriber@example.com', 'token', $now->modify('+1 hour'), $now);
-
-        $email = $this->factory()->listingUnavailableEmail($subscription, $listing);
-        $body = (string) $email->getTextBody();
-
-        self::assertSame('Оголошення OLX більше не доступне', $email->getSubject());
-        self::assertStringContainsString('TestProject', $body);
-        self::assertStringContainsString('Оголошення: Test chair', $body);
-        self::assertStringContainsString('URL: https://www.olx.ua/d/uk/obyavlenie/test-IDmail123.html', $body);
-        self::assertStringContainsString('після 20 послідовних перевірок', $body);
-        self::assertStringContainsString('Якщо ви не підписувалися на це відстеження', $body);
-    }
-
-    private function factory(): EmailFactory
-    {
-        return new EmailFactory('TestProject', 'no-reply@example.com', 'http://localhost:8000', 24, 20);
-    }
-
-    private function listing(DateTimeImmutable $now): Listing
-    {
         $listing = new Listing(
             'https://m.olx.ua/d/uk/obyavlenie/test-IDmail123.html',
             'https://www.olx.ua/d/uk/obyavlenie/test-IDmail123.html',
@@ -98,5 +45,42 @@ final class EmailFactoryTest extends TestCase
         $listing->markChecked(1000, 'UAH', 'Test chair', 'mail123', $now, $now);
 
         return $listing;
+    }
+
+    /**
+     * @throws DateMalformedStringException
+     */
+    private function subscription(Listing $listing): Subscription
+    {
+        $now = new DateTimeImmutable('2026-04-27 10:00:00');
+
+        return new Subscription($listing, 'subscriber@example.com', 'confirm-token', $now->modify('+24 hours'), $now);
+    }
+}
+
+final class RecordingEmailTemplateRenderer implements EmailTemplateRendererInterface
+{
+    public ?string $confirmationUrl = null;
+
+    public function renderConfirmation(Subscription $subscription, string $confirmationUrl): NotificationMessage
+    {
+        $this->confirmationUrl = $confirmationUrl;
+
+        return new NotificationMessage('Rendered subject', "Rendered body\n");
+    }
+
+    public function renderPriceChanged(
+        Subscription $subscription,
+        Listing $listing,
+        ?int $oldPrice,
+        int $newPrice,
+        string $currency,
+    ): NotificationMessage {
+        return new NotificationMessage('Rendered price subject', "Rendered price body\n");
+    }
+
+    public function renderListingUnavailable(Subscription $subscription, Listing $listing): NotificationMessage
+    {
+        return new NotificationMessage('Rendered unavailable subject', "Rendered unavailable body\n");
     }
 }

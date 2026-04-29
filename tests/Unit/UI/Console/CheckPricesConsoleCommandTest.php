@@ -15,6 +15,7 @@ use App\Tests\Support\NoOpSleeper;
 use App\Tests\Support\RecordingNotifier;
 use App\UI\Console\CheckPricesConsoleCommand;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 use Symfony\Component\Console\Tester\CommandTester;
 
 final class CheckPricesConsoleCommandTest extends TestCase
@@ -30,6 +31,7 @@ final class CheckPricesConsoleCommandTest extends TestCase
             new RecordingNotifier(),
             new MutableClock(),
             new NoOpSleeper(),
+            new NullLogger(),
             300,
             20,
         );

@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Application\Subscription;
 
+use App\Application\Notification\EmailRateLimiter;
 use App\Application\Notification\NotifierInterface;
 use App\Application\Subscription\ConfirmSubscriptionCommand;
 use App\Application\Subscription\ConfirmSubscriptionHandler;
 use App\Application\Subscription\ConfirmationTokenExpiredException;
 use App\Application\Subscription\CreateSubscriptionCommand;
 use App\Application\Subscription\CreateSubscriptionHandler;
+use App\Application\Subscription\CreateSubscriptionResult;
 use App\Application\Subscription\ListingCannotBeTrackedException;
 use App\Application\Subscription\ListingNotFoundException;
 use App\Domain\Listing\Listing;
@@ -58,6 +60,7 @@ final class SubscriptionHandlerTest extends TestCase
             $priceFetcher,
             new SequentialTokenGenerator(),
             $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
             $clock,
             24,
             300,
@@ -65,12 +68,13 @@ final class SubscriptionHandlerTest extends TestCase
             'https://m.olx.ua/d/uk/obyavlenie/example-IDtrack123.html',
             'subscriber@example.com',
         ));
-        $listing = $result->subscription->getListing();
+        $subscription = self::requireSubscription($result);
+        $listing = $subscription->getListing();
 
         self::assertCount(1, $listingRepository->listings);
         self::assertCount(1, $subscriptionRepository->subscriptions);
-        self::assertSame(SubscriptionStatus::Pending, $result->subscription->getStatus());
-        self::assertSame('token-1', $result->subscription->getConfirmationToken());
+        self::assertSame(SubscriptionStatus::Pending, $subscription->getStatus());
+        self::assertSame('token-1', $subscription->getConfirmationToken());
         self::assertSame(12345, $listing->getCurrentPrice());
         self::assertSame('UAH', $listing->getCurrency());
         self::assertSame('Test listing', $listing->getTitle());
@@ -79,6 +83,7 @@ final class SubscriptionHandlerTest extends TestCase
         self::assertSame($clock->now(), $listing->getLastCheckedAt());
         self::assertEquals($clock->now()->modify('+300 seconds'), $listing->getNextCheckAt());
         self::assertCount(1, $notifier->confirmations);
+        self::assertSame($clock->now(), $subscription->getLastEmailSentAt());
     }
 
     public function testRejectsNotFoundWithoutSavingRecordsOrSendingEmail(): void
@@ -99,6 +104,7 @@ final class SubscriptionHandlerTest extends TestCase
             ]),
             new SequentialTokenGenerator(),
             $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
             $clock,
             24,
             300,
@@ -137,6 +143,7 @@ final class SubscriptionHandlerTest extends TestCase
             ]),
             new SequentialTokenGenerator(),
             $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
             $clock,
             24,
             300,
@@ -182,6 +189,7 @@ final class SubscriptionHandlerTest extends TestCase
             $priceFetcher,
             new SequentialTokenGenerator(),
             $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
             $clock,
             24,
             300,
@@ -191,13 +199,112 @@ final class SubscriptionHandlerTest extends TestCase
             'https://m.olx.ua/d/uk/obyavlenie/example-IDtrack123.html',
             'User@Example.com',
         );
-        $first = $handler($command)->subscription;
-        $second = $handler($command)->subscription;
+        $first = self::requireSubscription($handler($command));
+        $clock->setNow(new DateTimeImmutable('2026-04-26 10:01:00'));
+        $second = self::requireSubscription($handler($command));
 
         self::assertSame($first, $second);
         self::assertCount(1, $listingRepository->listings);
         self::assertCount(1, $subscriptionRepository->subscriptions);
         self::assertSame('token-2', $second->getConfirmationToken());
+        self::assertCount(2, $notifier->confirmations);
+        self::assertSame(2, $priceFetcher->calls);
+    }
+
+    /**
+     * @throws DateMalformedStringException
+     */
+    public function testDuplicatePendingSubscriptionWithinRateLimitDoesNotSendEmailOrCreateDuplicate(): void
+    {
+        $clock = new FixedClock(new DateTimeImmutable('2026-04-26 10:00:00'));
+        $listingRepository = new InMemoryListingRepository();
+        $subscriptionRepository = new InMemorySubscriptionRepository();
+        $notifier = new RecordingNotifier();
+        $priceFetcher = new FakePriceFetcher([
+            'https://www.olx.ua/d/uk/obyavlenie/example-IDtrack123.html' => PriceFetchResult::found(
+                12345,
+                'UAH',
+                'Test listing',
+                'test',
+                'abc123',
+            ),
+        ]);
+        $handler = new CreateSubscriptionHandler(
+            new ListingUrlNormalizer(),
+            $listingRepository,
+            $subscriptionRepository,
+            $priceFetcher,
+            new SequentialTokenGenerator(),
+            $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
+            $clock,
+            24,
+            300,
+        );
+        $command = new CreateSubscriptionCommand(
+            'https://m.olx.ua/d/uk/obyavlenie/example-IDtrack123.html',
+            'User@Example.com',
+        );
+
+        $first = $handler($command);
+        $clock->setNow(new DateTimeImmutable('2026-04-26 10:00:59'));
+        $second = $handler($command);
+        $firstSubscription = self::requireSubscription($first);
+        $secondSubscription = self::requireSubscription($second);
+
+        self::assertSame($firstSubscription, $secondSubscription);
+        self::assertFalse($second->confirmationSent);
+        self::assertTrue($second->confirmationThrottled);
+        self::assertSame('token-1', $secondSubscription->getConfirmationToken());
+        self::assertCount(1, $subscriptionRepository->subscriptions);
+        self::assertCount(1, $notifier->confirmations);
+        self::assertSame(1, $priceFetcher->calls);
+    }
+
+    /**
+     * @throws DateMalformedStringException
+     */
+    public function testDuplicatePendingSubscriptionAfterRateLimitSendsEmail(): void
+    {
+        $clock = new FixedClock(new DateTimeImmutable('2026-04-26 10:00:00'));
+        $listingRepository = new InMemoryListingRepository();
+        $subscriptionRepository = new InMemorySubscriptionRepository();
+        $notifier = new RecordingNotifier();
+        $priceFetcher = new FakePriceFetcher([
+            'https://www.olx.ua/d/uk/obyavlenie/example-IDtrack123.html' => PriceFetchResult::found(
+                12345,
+                'UAH',
+                'Test listing',
+                'test',
+                'abc123',
+            ),
+        ]);
+        $handler = new CreateSubscriptionHandler(
+            new ListingUrlNormalizer(),
+            $listingRepository,
+            $subscriptionRepository,
+            $priceFetcher,
+            new SequentialTokenGenerator(),
+            $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
+            $clock,
+            24,
+            300,
+        );
+        $command = new CreateSubscriptionCommand(
+            'https://m.olx.ua/d/uk/obyavlenie/example-IDtrack123.html',
+            'User@Example.com',
+        );
+
+        $handler($command);
+        $clock->setNow(new DateTimeImmutable('2026-04-26 10:01:00'));
+        $result = $handler($command);
+
+        self::assertTrue($result->confirmationSent);
+        self::assertFalse($result->confirmationThrottled);
+        $subscription = self::requireSubscription($result);
+        self::assertSame('token-2', $subscription->getConfirmationToken());
+        self::assertSame($clock->now(), $subscription->getLastEmailSentAt());
         self::assertCount(2, $notifier->confirmations);
     }
 
@@ -226,6 +333,7 @@ final class SubscriptionHandlerTest extends TestCase
             $priceFetcher,
             new SequentialTokenGenerator(),
             $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
             $clock,
             24,
             300,
@@ -235,22 +343,181 @@ final class SubscriptionHandlerTest extends TestCase
             'https://m.olx.ua/d/uk/obyavlenie/example-IDtrack123.html',
             'subscriber@example.com',
         );
-        $subscription = $handler($command)->subscription;
+        $subscription = self::requireSubscription($handler($command));
         $subscription->confirm($clock->now());
 
         $result = $handler($command);
-        $sameSubscription = $result->subscription;
+        $sameSubscription = self::requireSubscription($result);
 
         self::assertSame($subscription, $sameSubscription);
         self::assertSame(SubscriptionStatus::Active, $sameSubscription->getStatus());
         self::assertTrue($result->alreadySubscribed);
         self::assertCount(1, $notifier->confirmations);
+        self::assertSame(1, $priceFetcher->calls);
     }
 
     /**
      * @throws DateMalformedStringException
      */
-    public function testSameEmailCanSubscribeToDifferentValidListings(): void
+    public function testSameEmailDifferentValidListingWithinRateLimitDoesNotCreateNewSubscription(): void
+    {
+        $clock = new FixedClock(new DateTimeImmutable('2026-04-26 10:00:00'));
+        $listingRepository = new InMemoryListingRepository();
+        $subscriptionRepository = new InMemorySubscriptionRepository();
+        $notifier = new RecordingNotifier();
+        $priceFetcher = new FakePriceFetcher([
+            'https://www.olx.ua/d/uk/obyavlenie/first-IDone123.html' => PriceFetchResult::found(
+                100,
+                'UAH',
+                'First listing',
+                'test',
+                'one123',
+            ),
+            'https://www.olx.ua/d/uk/obyavlenie/second-IDtwo456.html' => PriceFetchResult::found(
+                200,
+                'UAH',
+                'Second listing',
+                'test',
+                'two456',
+            ),
+        ]);
+        $handler = new CreateSubscriptionHandler(
+            new ListingUrlNormalizer(),
+            $listingRepository,
+            $subscriptionRepository,
+            $priceFetcher,
+            new SequentialTokenGenerator(),
+            $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
+            $clock,
+            24,
+            300,
+        );
+
+        $first = $handler(new CreateSubscriptionCommand(
+            'https://m.olx.ua/d/uk/obyavlenie/first-IDone123.html',
+            'User@Example.com',
+        ));
+        $second = $handler(new CreateSubscriptionCommand(
+            'https://m.olx.ua/d/uk/obyavlenie/second-IDtwo456.html',
+            'User@Example.com',
+        ));
+
+        $firstSubscription = self::requireSubscription($first);
+
+        self::assertNull($second->subscription);
+        self::assertSame('user@example.com', $firstSubscription->getEmail());
+        self::assertFalse($second->confirmationSent);
+        self::assertTrue($second->confirmationThrottled);
+        self::assertFalse($second->created);
+        self::assertCount(1, $listingRepository->listings);
+        self::assertCount(1, $subscriptionRepository->subscriptions);
+        self::assertCount(1, $notifier->confirmations);
+        self::assertSame(1, $priceFetcher->calls);
+    }
+
+    /**
+     * @throws DateMalformedStringException
+     */
+    public function testThrottledNewUrlDoesNotCallPriceFetcherOrCreateRecords(): void
+    {
+        $clock = new FixedClock(new DateTimeImmutable('2026-04-26 10:00:00'));
+        $listingRepository = new InMemoryListingRepository();
+        $subscriptionRepository = new InMemorySubscriptionRepository();
+        $notifier = new RecordingNotifier();
+        $priceFetcher = new FakePriceFetcher([
+            'https://www.olx.ua/d/uk/obyavlenie/first-IDone123.html' => PriceFetchResult::found(
+                100,
+                'UAH',
+                'First listing',
+                'test',
+                'one123',
+            ),
+            'https://www.olx.ua/d/uk/obyavlenie/second-IDtwo456.html' => PriceFetchResult::found(
+                200,
+                'UAH',
+                'Second listing',
+                'test',
+                'two456',
+            ),
+        ]);
+        $handler = new CreateSubscriptionHandler(
+            new ListingUrlNormalizer(),
+            $listingRepository,
+            $subscriptionRepository,
+            $priceFetcher,
+            new SequentialTokenGenerator(),
+            $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
+            $clock,
+            24,
+            300,
+        );
+
+        $handler(new CreateSubscriptionCommand(
+            'https://m.olx.ua/d/uk/obyavlenie/first-IDone123.html',
+            'user@example.com',
+        ));
+        $clock->setNow(new DateTimeImmutable('2026-04-26 10:00:30'));
+        $result = $handler(new CreateSubscriptionCommand(
+            'https://m.olx.ua/d/uk/obyavlenie/second-IDtwo456.html',
+            'user@example.com',
+        ));
+
+        self::assertTrue($result->confirmationThrottled);
+        self::assertNull($result->subscription);
+        self::assertSame(1, $priceFetcher->calls);
+        self::assertSame(['https://www.olx.ua/d/uk/obyavlenie/first-IDone123.html'], $priceFetcher->fetchedUrls);
+        self::assertCount(1, $listingRepository->listings);
+        self::assertCount(1, $subscriptionRepository->subscriptions);
+    }
+
+    /**
+     * @throws DateMalformedStringException
+     */
+    public function testNonThrottledValidRequestCallsPriceFetcher(): void
+    {
+        $clock = new FixedClock(new DateTimeImmutable('2026-04-26 10:00:00'));
+        $listingRepository = new InMemoryListingRepository();
+        $subscriptionRepository = new InMemorySubscriptionRepository();
+        $notifier = new RecordingNotifier();
+        $priceFetcher = new FakePriceFetcher([
+            'https://www.olx.ua/d/uk/obyavlenie/example-IDtrack123.html' => PriceFetchResult::found(
+                12345,
+                'UAH',
+                'Test listing',
+                'test',
+                'abc123',
+            ),
+        ]);
+
+        $handler = new CreateSubscriptionHandler(
+            new ListingUrlNormalizer(),
+            $listingRepository,
+            $subscriptionRepository,
+            $priceFetcher,
+            new SequentialTokenGenerator(),
+            $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
+            $clock,
+            24,
+            300,
+        );
+
+        $result = $handler(new CreateSubscriptionCommand(
+            'https://m.olx.ua/d/uk/obyavlenie/example-IDtrack123.html',
+            'subscriber@example.com',
+        ));
+
+        self::assertTrue($result->confirmationSent);
+        self::assertSame(1, $priceFetcher->calls);
+        self::assertSame(['https://www.olx.ua/d/uk/obyavlenie/example-IDtrack123.html'], $priceFetcher->fetchedUrls);
+    }
+
+    /**
+     * @throws DateMalformedStringException
+     */
+    public function testDifferentEmailIsNotThrottled(): void
     {
         $clock = new FixedClock(new DateTimeImmutable('2026-04-26 10:00:00'));
         $listingRepository = new InMemoryListingRepository();
@@ -278,6 +545,7 @@ final class SubscriptionHandlerTest extends TestCase
             ]),
             new SequentialTokenGenerator(),
             $notifier,
+            new EmailRateLimiter($subscriptionRepository, $clock, 60),
             $clock,
             24,
             300,
@@ -285,19 +553,27 @@ final class SubscriptionHandlerTest extends TestCase
 
         $first = $handler(new CreateSubscriptionCommand(
             'https://m.olx.ua/d/uk/obyavlenie/first-IDone123.html',
-            'User@Example.com',
-        ))->subscription;
+            'first@example.com',
+        ));
         $second = $handler(new CreateSubscriptionCommand(
             'https://m.olx.ua/d/uk/obyavlenie/second-IDtwo456.html',
-            'User@Example.com',
-        ))->subscription;
+            'second@example.com',
+        ));
 
-        self::assertNotSame($first, $second);
-        self::assertSame('user@example.com', $first->getEmail());
-        self::assertSame('user@example.com', $second->getEmail());
-        self::assertCount(2, $listingRepository->listings);
+        self::assertTrue($first->confirmationSent);
+        self::assertTrue($second->confirmationSent);
+        self::assertFalse($second->confirmationThrottled);
         self::assertCount(2, $subscriptionRepository->subscriptions);
         self::assertCount(2, $notifier->confirmations);
+    }
+
+    private static function requireSubscription(CreateSubscriptionResult $result): Subscription
+    {
+        if (!$result->subscription instanceof Subscription) {
+            self::fail('Expected subscription result to contain a subscription.');
+        }
+
+        return $result->subscription;
     }
 
     /**
@@ -387,7 +663,7 @@ final class SubscriptionHandlerTest extends TestCase
     }
 }
 
-final readonly class FixedClock implements ClockInterface
+final class FixedClock implements ClockInterface
 {
     public function __construct(private DateTimeImmutable $now)
     {
@@ -396,6 +672,11 @@ final readonly class FixedClock implements ClockInterface
     public function now(): DateTimeImmutable
     {
         return $this->now;
+    }
+
+    public function setNow(DateTimeImmutable $now): void
+    {
+        $this->now = $now;
     }
 }
 
@@ -430,10 +711,15 @@ final class InMemoryListingRepository implements ListingRepositoryInterface
     }
 }
 
-final readonly class FakePriceFetcher implements PriceFetcherInterface
+final class FakePriceFetcher implements PriceFetcherInterface
 {
+    public int $calls = 0;
+
+    /** @var list<string> */
+    public array $fetchedUrls = [];
+
     /** @param array<string, PriceFetchResult|Throwable> $results */
-    public function __construct(private array $results)
+    public function __construct(private readonly array $results)
     {
     }
 
@@ -442,6 +728,9 @@ final readonly class FakePriceFetcher implements PriceFetcherInterface
      */
     public function fetch(string $url): PriceFetchResult
     {
+        $this->calls++;
+        $this->fetchedUrls[] = $url;
+
         $result = $this->results[$url] ?? null;
 
         if ($result instanceof Throwable) {
@@ -490,6 +779,29 @@ final class InMemorySubscriptionRepository implements SubscriptionRepositoryInte
         }
 
         return null;
+    }
+
+    public function findLatestEmailSentAtByEmail(string $email): ?DateTimeImmutable
+    {
+        $normalizedEmail = mb_strtolower($email);
+        $latest = null;
+
+        foreach ($this->subscriptions as $subscription) {
+            if ($subscription->getEmail() !== $normalizedEmail) {
+                continue;
+            }
+
+            $sentAt = $subscription->getLastEmailSentAt();
+            if ($sentAt === null) {
+                continue;
+            }
+
+            if ($latest === null || $sentAt > $latest) {
+                $latest = $sentAt;
+            }
+        }
+
+        return $latest;
     }
 
     public function findActiveByListing(Listing $listing): array

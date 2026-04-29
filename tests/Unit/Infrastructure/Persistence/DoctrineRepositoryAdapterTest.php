@@ -14,6 +14,8 @@ use DateMalformedStringException;
 use DateTimeImmutable;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\EntityRepository;
+use Doctrine\ORM\Query;
+use Doctrine\ORM\QueryBuilder;
 use PHPUnit\Framework\TestCase;
 
 final class DoctrineRepositoryAdapterTest extends TestCase
@@ -102,6 +104,57 @@ final class DoctrineRepositoryAdapterTest extends TestCase
         $repository = new DoctrineSubscriptionRepository($entityManager);
 
         self::assertSame([$subscription], $repository->findActiveByListing($listing));
+    }
+
+    public function testSubscriptionRepositoryFindsLatestEmailSentAtByEmail(): void
+    {
+        $query = $this->createMock(Query::class);
+        $query
+            ->expects(self::once())
+            ->method('getSingleScalarResult')
+            ->willReturn('2026-04-27 10:02:00');
+
+        $queryBuilder = $this->createMock(QueryBuilder::class);
+        $queryBuilder->expects(self::once())->method('select')->with('MAX(s.lastEmailSentAt)')->willReturnSelf();
+        $queryBuilder->expects(self::once())->method('from')->with(Subscription::class, 's')->willReturnSelf();
+        $queryBuilder->expects(self::exactly(2))->method('andWhere')->willReturnSelf();
+        $queryBuilder
+            ->expects(self::once())
+            ->method('setParameter')
+            ->with('email', 'subscriber@example.com')
+            ->willReturnSelf();
+        $queryBuilder->expects(self::once())->method('getQuery')->willReturn($query);
+
+        $entityManager = $this->createMock(EntityManagerInterface::class);
+        $entityManager->expects(self::once())->method('createQueryBuilder')->willReturn($queryBuilder);
+
+        $latest = (new DoctrineSubscriptionRepository($entityManager))
+            ->findLatestEmailSentAtByEmail('Subscriber@Example.com');
+
+        self::assertEquals(new DateTimeImmutable('2026-04-27 10:02:00'), $latest);
+    }
+
+    public function testSubscriptionRepositoryReturnsNullWhenNoEmailWasSent(): void
+    {
+        $query = $this->createMock(Query::class);
+        $query
+            ->expects(self::once())
+            ->method('getSingleScalarResult')
+            ->willReturn(null);
+
+        $queryBuilder = $this->createMock(QueryBuilder::class);
+        $queryBuilder->method('select')->willReturnSelf();
+        $queryBuilder->method('from')->willReturnSelf();
+        $queryBuilder->method('andWhere')->willReturnSelf();
+        $queryBuilder->method('setParameter')->willReturnSelf();
+        $queryBuilder->method('getQuery')->willReturn($query);
+
+        $entityManager = $this->createMock(EntityManagerInterface::class);
+        $entityManager->method('createQueryBuilder')->willReturn($queryBuilder);
+
+        self::assertNull((new DoctrineSubscriptionRepository($entityManager))->findLatestEmailSentAtByEmail(
+            'subscriber@example.com',
+        ));
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Domain\Subscription;
 
 use App\Domain\Listing\Listing;
+use DateTimeImmutable;
 
 interface SubscriptionRepositoryInterface
 {
@@ -17,6 +18,11 @@ interface SubscriptionRepositoryInterface
      * Finds a subscription by confirmation token regardless of status.
      */
     public function findByConfirmationToken(string $token): ?Subscription;
+
+    /**
+     * Finds the latest successful email send timestamp for a normalized recipient address.
+     */
+    public function findLatestEmailSentAtByEmail(string $email): ?DateTimeImmutable;
 
     /**
      * Finds active subscriptions for the given listing.

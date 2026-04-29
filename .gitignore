@@ -1,9 +1,22 @@
 /.env
 /.idea/
+
+# Runtime and dependencies
 /var/
 /vendor/
+
+# Test and quality artifacts
 /coverage/
+*.coverage
+coverage.xml
+clover.xml
 /.phpunit.cache/
+/.phpunit.result.cache
+/.phpunit.result.cache.*
+/.phpstan.cache/
+/.phpstan.result.cache
+/.php-cs-fixer.cache
+/.phpcs-cache
 
 ###> symfony/framework-bundle ###
 /.env.local

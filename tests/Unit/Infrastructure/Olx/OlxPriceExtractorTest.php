@@ -6,10 +6,105 @@ namespace App\Tests\Unit\Infrastructure\Olx;
 
 use App\Infrastructure\Olx\OlxHtmlPriceExtractor;
 use App\Infrastructure\Olx\OlxJsonLdPriceExtractor;
+use App\Infrastructure\Olx\OlxPrerenderedStatePriceExtractor;
 use PHPUnit\Framework\TestCase;
 
 final class OlxPriceExtractorTest extends TestCase
 {
+    public function testPrerenderedStatePriceExtraction(): void
+    {
+        $html = <<<'HTML'
+<script>
+window.__PRERENDERED_STATE__ = {
+  "ad": {"ad": {"title": "Acer keyboard cover", "price": {"regularPrice": {"value": 540, "currencyCode": "UAH"}}}}
+};
+</script>
+HTML;
+
+        $result = (new OlxPrerenderedStatePriceExtractor())->extract($html);
+
+        self::assertNotNull($result);
+        self::assertNotNull($result->price);
+        self::assertSame(540, $result->price->amount);
+        self::assertSame('UAH', $result->price->currency);
+        self::assertSame('Acer keyboard cover', $result->title);
+        self::assertSame('prerendered_state', $result->source);
+    }
+
+    public function testPrerenderedStateSupportsEscapedJsonString(): void
+    {
+        $json = json_encode([
+            'ad' => [
+                'ad' => [
+                    'title' => 'Escaped listing',
+                    'price' => [
+                        'regularPrice' => [
+                            'value' => '1 250',
+                            'currencyCode' => 'usd',
+                        ],
+                    ],
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR);
+        $html = sprintf(
+            '<script>window.__PRERENDERED_STATE__ = %s;</script>',
+            json_encode($json, JSON_THROW_ON_ERROR),
+        );
+
+        $result = (new OlxPrerenderedStatePriceExtractor())->extract($html);
+
+        self::assertNotNull($result);
+        self::assertNotNull($result->price);
+        self::assertSame(1250, $result->price->amount);
+        self::assertSame('USD', $result->price->currency);
+        self::assertSame('Escaped listing', $result->title);
+    }
+
+    public function testPrerenderedStateReturnsNullForInvalidJson(): void
+    {
+        $html = '<script>window.__PRERENDERED_STATE__ = {"ad": {"ad": bad json};</script>';
+
+        self::assertNull((new OlxPrerenderedStatePriceExtractor())->extract($html));
+    }
+
+    public function testPrerenderedStateReturnsNullWhenPriceIsMissing(): void
+    {
+        $html = '<script>window.__PRERENDERED_STATE__ = {"ad":{"ad":{"title":"No price"}}};</script>';
+
+        self::assertNull((new OlxPrerenderedStatePriceExtractor())->extract($html));
+    }
+
+    public function testPrerenderedStateUsesDisplayValueFallbackWhenSafe(): void
+    {
+        $html = <<<'HTML'
+<script>
+window.__PRERENDERED_STATE__ = {
+  "ad": {"ad": {"title": "Display price", "price": {"regularPrice": {"displayValue": "2 300 грн."}}}}
+};
+</script>
+HTML;
+
+        $result = (new OlxPrerenderedStatePriceExtractor())->extract($html);
+
+        self::assertNotNull($result);
+        self::assertNotNull($result->price);
+        self::assertSame(2300, $result->price->amount);
+        self::assertSame('UAH', $result->price->currency);
+    }
+
+    public function testPrerenderedStateIgnoresUnsafeDisplayValueFallback(): void
+    {
+        $html = <<<'HTML'
+<script>
+window.__PRERENDERED_STATE__ = {
+  "ad": {"ad": {"title": "Unsafe display", "price": {"regularPrice": {"displayValue": "item code 2300"}}}}
+};
+</script>
+HTML;
+
+        self::assertNull((new OlxPrerenderedStatePriceExtractor())->extract($html));
+    }
+
     public function testJsonLdPriceExtraction(): void
     {
         $html = <<<'HTML'
@@ -93,6 +188,7 @@ HTML;
 
     public function testNoPriceFound(): void
     {
+        self::assertNull((new OlxPrerenderedStatePriceExtractor())->extract('<html></html>'));
         self::assertNull((new OlxJsonLdPriceExtractor())->extract('<html></html>'));
         self::assertNull((new OlxHtmlPriceExtractor())->extract('<html><title>No price</title></html>'));
     }

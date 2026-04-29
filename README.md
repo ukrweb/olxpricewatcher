@@ -74,8 +74,12 @@ flowchart TD
 - Symfony 7
 - PostgreSQL 16
 - Doctrine ORM і Migrations
+- Symfony HttpClient
 - Symfony Mailer
 - Symfony Console
+- Symfony Translation
+- Symfony Monolog Bundle
+- Swagger UI / OpenAPI
 - PHPUnit
 - PHPStan
 - PHP_CodeSniffer
@@ -108,7 +112,7 @@ cp .env.example .env
 3. Запустити контейнери:
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
 Під час build Docker запускає `composer install`. Додатково запускати `composer install` на хості не потрібно. Якщо `composer.json` або `composer.lock` змінювалися після build, виконайте:
@@ -166,6 +170,8 @@ Worker також працює автоматично в окремому кон
 - `POSTGRES_*` - параметри PostgreSQL.
 - `MAILER_DSN` - SMTP DSN. За замовчуванням локально використовується Mailpit: `smtp://mailpit:1025`.
 - `MAIL_FROM` - адреса відправника.
+- `LOCALE` - мова plain-text листів із Symfony Translation: `ua` або `en`; невідоме значення fallback-иться до `ua`. Тексти зберігаються в `translations/emails.ua.yaml` і `translations/emails.en.yaml`.
+- `EMAIL_RATE_LIMIT_SECONDS` - мінімальна кількість секунд між confirmation emails для тієї самої email-адреси.
 - `OLX_CHECK_INTERVAL_FROM_SECONDS` і `OLX_CHECK_INTERVAL_TO_SECONDS` - випадковий інтервал між циклами worker-а.
 - `OLX_UNAVAILABLE_NOTIFICATION_THRESHOLD` - кількість послідовних `not_found`, після якої активні підписники отримають лист про недоступність оголошення.
 - `OLX_HTTP_TIMEOUT_SECONDS` і `OLX_USER_AGENT` - налаштування HTTP-запиту до OLX.
@@ -209,9 +215,28 @@ grep -R "MAILER_DSN\|smtp-relay\|mailtrap\|demomailtrap\|sandbox.smtp" -n . --ex
 
 - лист підтвердження підписки;
 - лист про зміну ціни;
-- лист про недоступність оголошення після повторних підтверджених `404/not_found`.
+- лист про недоступність оголошення після повторних підтверджених `404` або `410` `not_found`.
+
+Визначення недоступності відокремлює підтверджену відсутність оголошення від тимчасових збоїв:
+
+- HTTP `404` і `410` - це `not_found`, вони збільшують `consecutive_not_found_count`.
+- HTTP `5xx`, timeout і parsing failures - це `parse_error`, вони збільшують `consecutive_fetch_error_count`.
+- Лист про недоступність запускається тільки порогом `not_found`, не fetch errors, і надсилається лише один раз, доки оголошення знову не стане доступним.
+
+Рендеринг листів розділений за відповідальністю: `EmailFactory` створює Symfony `Email` і встановлює sender/recipient/subject/body, а `SymfonyEmailTemplateRenderer` отримує subject/body через Symfony Translation із домену `emails`. Мова визначається `LOCALE`: `ua` або `en`, невідоме значення fallback-иться до `ua`. Назва сайту в листах підставляється з `PROJECT_NAME`.
 
 Для реального SMTP змініть `MAILER_DSN` у `.env`. Не комітьте реальні SMTP credentials.
+
+Публічні subscription endpoints можуть бути використані для надсилання confirmation email на сторонні адреси. `EMAIL_RATE_LIMIT_SECONDS` захищає confirmation emails від повторного надсилання на ту саму email-адресу. Throttling перевіряється до початкового OLX fetch, тому throttled запити не витрачають OLX requests і не створюють нові listings/subscriptions. Throttled запити повертають HTTP `429 confirmation_throttled`; якщо немає наявної subscription для повторного використання, нова pending subscription не створюється. Це не повна anti-spam система. Для production варто додати ширший rate limiting, CAPTCHA, IP throttling, unsubscribe links і sender reputation controls.
+
+Якщо Symfony Mailer не може надіслати confirmation email, API повертає HTTP `502` із безпечним JSON повідомленням:
+
+```json
+{
+  "status": "error",
+  "message": "Unable to send confirmation email."
+}
+```
 
 ### Live SMTP перевірка
 
@@ -238,7 +263,34 @@ php bin/console app:check-prices
 
 Після кожного повного циклу він чекає випадковий час між `OLX_CHECK_INTERVAL_FROM_SECONDS` і `OLX_CHECK_INTERVAL_TO_SECONDS`. Якщо `FROM > TO`, `docker/worker/run.sh` завершується з помилкою, щоб конфігураційна проблема була помітною.
 
+## Логи
+
+Логи app і worker пишуться у стандартний Symfony/Monolog output і доступні через Docker logs:
+
+```bash
+docker compose logs -f app
+docker compose logs -f worker
+```
+
+У логах є важливі operational events: HTTP status/latency для OLX, використаний extractor source, помилки створення subscription, mail transport failures і зміни статусів listings у worker. Логи не повинні містити `MAILER_DSN`, SMTP passwords/API keys, confirmation tokens, повний OLX HTML response або email body.
+
 ## Перевірки якості
+
+Після чистого clone або розпакування проєкту Docker-контейнер може показати Git warning:
+
+```text
+fatal: detected dubious ownership in repository at '/app'
+```
+
+Це відбувається через різницю власника файлів між хостом і користувачем усередині контейнера. Налаштовувати Git треба саме в контейнері, бо команда `git config --global --add safe.directory /app`, виконана на хості, змінює host Git config і не допомагає контейнеру.
+
+Виконайте:
+
+```bash
+docker compose exec app git config --global --add safe.directory /app
+```
+
+Після цього запускайте quality commands:
 
 ```bash
 docker compose exec app composer cs-check
@@ -258,6 +310,12 @@ docker compose exec app composer qa
 - Next.js data endpoint `/_next/data/{buildId}/...json`: відхилено, бо `buildId` змінюється після деплоїв і потребує динамічного discovery.
 - `window.__PRERENDERED_STATE__`: обрано як основне джерело, бо дані вже є в server-rendered HTML.
 - JSON-LD і HTML parsing: залишені як fallback для стійкості.
+
+Фінальний порядок отримання ціни:
+
+1. `window.__PRERENDERED_STATE__`
+2. JSON-LD
+3. HTML fallback
 
 Сервіс не обходить CAPTCHA, авторизацію, rate limits і не використовує proxy rotation.
 
@@ -292,4 +350,3 @@ docker compose down -v
 ```
 
 Звичайний `docker compose down` не видаляє named volume з даними БД.
-

@@ -46,6 +46,9 @@ class Subscription
     #[ORM\Column(nullable: true)]
     private ?DateTimeImmutable $lastNotifiedAt = null;
 
+    #[ORM\Column(nullable: true)]
+    private ?DateTimeImmutable $lastEmailSentAt = null;
+
     #[ORM\Column]
     private DateTimeImmutable $createdAt;
 
@@ -103,6 +106,20 @@ class Subscription
         return $this->getStatus() === SubscriptionStatus::Active;
     }
 
+    public function getLastEmailSentAt(): ?DateTimeImmutable
+    {
+        return $this->lastEmailSentAt;
+    }
+
+    public function canSendEmail(DateTimeImmutable $now, int $minimumSecondsBetweenEmails): bool
+    {
+        if ($this->lastEmailSentAt === null) {
+            return true;
+        }
+
+        return $now->getTimestamp() - $this->lastEmailSentAt->getTimestamp() >= $minimumSecondsBetweenEmails;
+    }
+
     public function refreshConfirmation(string $token, DateTimeImmutable $expiresAt, DateTimeImmutable $now): void
     {
         if ($this->getStatus() === SubscriptionStatus::Active) {
@@ -126,6 +143,12 @@ class Subscription
     {
         $this->lastNotifiedPrice = $newPrice;
         $this->lastNotifiedAt = $now;
+        $this->touch($now);
+    }
+
+    public function markEmailSent(DateTimeImmutable $now): void
+    {
+        $this->lastEmailSentAt = $now;
         $this->touch($now);
     }
 

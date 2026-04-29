@@ -7,6 +7,7 @@ namespace App\Tests\Support;
 use App\Domain\Listing\Listing;
 use App\Domain\Subscription\Subscription;
 use App\Domain\Subscription\SubscriptionRepositoryInterface;
+use DateTimeImmutable;
 use RuntimeException;
 
 final class ThrowingSubscriptionRepository implements SubscriptionRepositoryInterface
@@ -17,6 +18,11 @@ final class ThrowingSubscriptionRepository implements SubscriptionRepositoryInte
     }
 
     public function findByConfirmationToken(string $token): ?Subscription
+    {
+        throw new RuntimeException('Storage is unavailable.');
+    }
+
+    public function findLatestEmailSentAtByEmail(string $email): ?DateTimeImmutable
     {
         throw new RuntimeException('Storage is unavailable.');
     }

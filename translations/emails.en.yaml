@@ -1,0 +1,68 @@
+confirmation:
+  subject: 'Confirm your %project_name% subscription'
+  body: |
+    Hello,
+
+    Someone requested a price tracking subscription in %project_name% for this OLX listing:
+
+    Listing: %title%
+    URL: %url%
+
+    Email address: %email%
+
+    If this was you, confirm the subscription using the link below:
+
+    %confirmation_url%
+
+    After confirmation, %project_name% will track the listing price and email you when the price changes.
+
+    If you did not request this subscription, ignore this email. The subscription will remain inactive and you will not receive price-change notifications.
+
+    This confirmation link is valid for %ttl_hours% hours.
+
+    --
+    %project_name%
+
+price_changed:
+  subject: 'OLX price changed: %title%'
+  body: |
+    Hello,
+
+    You are subscribed to price tracking for this OLX listing through %project_name%:
+
+    Listing: %title%
+    URL: %url%
+
+    The listing price changed:
+
+    Old price: %old_price%
+    New price: %new_price%
+
+    Open the listing here:
+    %url%
+
+    If you did not subscribe to this tracking, ignore this email.
+
+    --
+    %project_name%
+
+listing_unavailable:
+  subject: 'OLX listing is no longer available'
+  body: |
+    Hello,
+
+    You are subscribed to tracking for this OLX listing through %project_name%:
+
+    Listing: %title%
+    URL: %url%
+
+    The system could not find this listing on OLX after %unavailable_threshold% consecutive checks.
+    It may have been sold, deleted, or become temporarily unavailable.
+
+    While the listing is unavailable, new price-change notifications will not be sent.
+    If the listing becomes available again, tracking may resume automatically.
+
+    If you did not subscribe to this tracking, ignore this email.
+
+    --
+    %project_name%

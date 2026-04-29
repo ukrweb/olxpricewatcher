@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Application\Subscription;
 
+use App\Application\Notification\EmailRateLimiter;
 use App\Application\Notification\NotifierInterface;
 use App\Domain\Listing\Listing;
 use App\Domain\Listing\ListingRepositoryInterface;
@@ -29,6 +30,7 @@ final readonly class CreateSubscriptionHandler
         private PriceFetcherInterface $priceFetcher,
         private ConfirmationTokenGeneratorInterface $tokenGenerator,
         private NotifierInterface $notifier,
+        private EmailRateLimiter $emailRateLimiter,
         private ClockInterface $clock,
         private int $confirmationTtlHours,
         private int $checkIntervalSeconds,
@@ -55,8 +57,22 @@ final readonly class CreateSubscriptionHandler
             throw new InvalidSubscriptionInputException($exception->getMessage(), 0, $exception);
         }
 
+        $email = mb_strtolower(trim($command->email));
         $now = $this->clock->now();
         $nextCheckAt = $now->modify(sprintf('+%d seconds', $this->checkIntervalSeconds));
+        $listing = $this->listingRepository->findByNormalizedUrl($normalized->normalizedUrl);
+        $subscription = $listing instanceof Listing
+            ? $this->subscriptionRepository->findByListingAndEmail($listing, $email)
+            : null;
+
+        if ($subscription instanceof Subscription && $subscription->getStatus() === SubscriptionStatus::Active) {
+            return new CreateSubscriptionResult($subscription, false, false, true, false);
+        }
+
+        $recipientThrottled = $this->emailRateLimiter->isConfirmationThrottled($email);
+        if ($recipientThrottled) {
+            return new CreateSubscriptionResult($subscription, false, false, false, true);
+        }
 
         try {
             $priceResult = $this->priceFetcher->fetch($normalized->normalizedUrl);
@@ -74,9 +90,22 @@ final readonly class CreateSubscriptionHandler
             throw new ListingCannotBeTrackedException($priceResult->error ?? 'Unable to extract listing price.');
         }
 
-        $listing = $this->listingRepository->findByNormalizedUrl($normalized->normalizedUrl);
-        if (!$listing instanceof Listing) {
-            $listing = new Listing($normalized->originalUrl, $normalized->normalizedUrl, $normalized->externalId, $now);
+        $expiresAt = $now->modify(sprintf('+%d hours', $this->confirmationTtlHours));
+        $created = false;
+        if (!$subscription instanceof Subscription) {
+            if (!$listing instanceof Listing) {
+                $listing = new Listing(
+                    $normalized->originalUrl,
+                    $normalized->normalizedUrl,
+                    $normalized->externalId,
+                    $now,
+                );
+            }
+
+            $subscription = new Subscription($listing, $email, $this->tokenGenerator->generate(), $expiresAt, $now);
+            $created = true;
+        } else {
+            $subscription->refreshConfirmation($this->tokenGenerator->generate(), $expiresAt, $now);
         }
 
         $listing->markChecked(
@@ -89,28 +118,17 @@ final readonly class CreateSubscriptionHandler
         );
         $this->listingRepository->save($listing);
 
-        $email = mb_strtolower(trim($command->email));
-        $expiresAt = $now->modify(sprintf('+%d hours', $this->confirmationTtlHours));
-        $subscription = $this->subscriptionRepository->findByListingAndEmail($listing, $email);
-
-        $sendConfirmation = true;
-        $alreadySubscribed = false;
-        $created = false;
-        if (!$subscription instanceof Subscription) {
-            $subscription = new Subscription($listing, $email, $this->tokenGenerator->generate(), $expiresAt, $now);
-            $created = true;
-        } elseif ($subscription->getStatus() === SubscriptionStatus::Active) {
-            $sendConfirmation = false;
-            $alreadySubscribed = true;
-        } else {
-            $subscription->refreshConfirmation($this->tokenGenerator->generate(), $expiresAt, $now);
-        }
-
         $this->subscriptionRepository->save($subscription);
-        if ($sendConfirmation) {
-            $this->notifier->sendSubscriptionConfirmation($subscription);
-        }
+        $this->notifier->sendSubscriptionConfirmation($subscription);
+        $subscription->markEmailSent($now);
+        $this->subscriptionRepository->save($subscription);
 
-        return new CreateSubscriptionResult($subscription, $created, $sendConfirmation, $alreadySubscribed);
+        return new CreateSubscriptionResult(
+            $subscription,
+            $created,
+            true,
+            false,
+            false,
+        );
     }
 }
