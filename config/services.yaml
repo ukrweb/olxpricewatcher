@@ -1,0 +1,49 @@
+parameters:
+  project_name: '%env(PROJECT_NAME)%'
+  mail_from: '%env(MAIL_FROM)%'
+  app_base_url: '%env(APP_BASE_URL)%'
+  olx_check_interval_to_seconds: '%env(int:OLX_CHECK_INTERVAL_TO_SECONDS)%'
+  olx_unavailable_notification_threshold: '%env(int:OLX_UNAVAILABLE_NOTIFICATION_THRESHOLD)%'
+  olx_http_timeout_seconds: '%env(int:OLX_HTTP_TIMEOUT_SECONDS)%'
+  olx_user_agent: '%env(OLX_USER_AGENT)%'
+  subscription_confirmation_ttl_hours: '%env(int:SUBSCRIPTION_CONFIRMATION_TTL_HOURS)%'
+
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+
+  App\:
+    resource: '../src/'
+
+  App\Domain\Listing\ListingRepositoryInterface: '@App\Infrastructure\Persistence\DoctrineListingRepository'
+  App\Domain\Subscription\SubscriptionRepositoryInterface: '@App\Infrastructure\Persistence\DoctrineSubscriptionRepository'
+  App\Domain\Subscription\ConfirmationTokenGeneratorInterface: '@App\Infrastructure\Persistence\RandomConfirmationTokenGenerator'
+  App\Domain\Price\PriceFetcherInterface: '@App\Infrastructure\Olx\OlxCompositePriceFetcher'
+  App\Application\PriceTracking\PriceHistoryRepositoryInterface: '@App\Infrastructure\Persistence\DoctrinePriceHistoryRepository'
+  App\Application\Notification\NotifierInterface: '@App\Infrastructure\Mail\SymfonyEmailNotifier'
+  App\Shared\ClockInterface: '@App\Shared\SystemClock'
+  App\Shared\SleeperInterface: '@App\Shared\NativeSleeper'
+
+  App\Infrastructure\Olx\OlxHttpClient:
+    arguments:
+      $timeoutSeconds: '%olx_http_timeout_seconds%'
+      $userAgent: '%olx_user_agent%'
+
+  App\Application\Subscription\CreateSubscriptionHandler:
+    arguments:
+      $confirmationTtlHours: '%subscription_confirmation_ttl_hours%'
+      $checkIntervalSeconds: '%olx_check_interval_to_seconds%'
+
+  App\Application\PriceTracking\CheckPricesHandler:
+    arguments:
+      $checkIntervalSeconds: '%olx_check_interval_to_seconds%'
+      $unavailableNotificationThreshold: '%olx_unavailable_notification_threshold%'
+
+  App\Infrastructure\Mail\EmailFactory:
+    arguments:
+      $projectName: '%project_name%'
+      $mailFrom: '%mail_from%'
+      $appBaseUrl: '%app_base_url%'
+      $confirmationTtlHours: '%subscription_confirmation_ttl_hours%'
+      $unavailableNotificationThreshold: '%olx_unavailable_notification_threshold%'

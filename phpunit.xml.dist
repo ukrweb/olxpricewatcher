@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="vendor/autoload.php" colors="true">
+  <php>
+    <server name="APP_ENV" value="test" force="true"/>
+    <server name="APP_DEBUG" value="1" force="true"/>
+    <server name="KERNEL_CLASS" value="App\Kernel"/>
+
+    <env name="APP_ENV" value="test"/>
+    <env name="APP_DEBUG" value="1"/>
+    <env name="APP_SECRET" value="test_secret"/>
+    <env name="PROJECT_NAME" value="TestProject"/>
+    <env name="APP_BASE_URL" value="http://localhost:8000"/>
+    <env name="DATABASE_URL" value="postgresql://app:app@database:5432/olx_price_watcher?serverVersion=16&amp;charset=utf8"/>
+    <env name="MAILER_DSN" value="null://null"/>
+    <env name="MAIL_FROM" value="no-reply@example.com"/>
+    <env name="OLX_CHECK_INTERVAL_FROM_SECONDS" value="300"/>
+    <env name="OLX_CHECK_INTERVAL_TO_SECONDS" value="600"/>
+    <env name="OLX_UNAVAILABLE_NOTIFICATION_THRESHOLD" value="20"/>
+    <env name="OLX_HTTP_TIMEOUT_SECONDS" value="15"/>
+    <env name="OLX_USER_AGENT" value="Mozilla/5.0 (compatible; OLXPriceWatcher/1.0)"/>
+    <env name="SUBSCRIPTION_CONFIRMATION_TTL_HOURS" value="24"/>
+  </php>
+  <testsuites>
+    <testsuite name="unit">
+      <directory>tests</directory>
+    </testsuite>
+  </testsuites>
+</phpunit>

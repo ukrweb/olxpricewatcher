@@ -1,0 +1,99 @@
+x-php-build: &php-build
+  context: .
+  dockerfile: docker/php/Dockerfile
+  args:
+    PHP_MEMORY_LIMIT: ${PHP_MEMORY_LIMIT}
+    PHP_UPLOAD_MAX_FILESIZE: ${PHP_UPLOAD_MAX_FILESIZE}
+    PHP_POST_MAX_SIZE: ${PHP_POST_MAX_SIZE}
+    PHP_MAX_EXECUTION_TIME: ${PHP_MAX_EXECUTION_TIME}
+    PHP_DATE_TIMEZONE: ${PHP_DATE_TIMEZONE}
+    PHP_XDEBUG_MODE: ${PHP_XDEBUG_MODE}
+    PHP_XDEBUG_CLIENT_HOST: ${PHP_XDEBUG_CLIENT_HOST}
+    PHP_XDEBUG_CLIENT_PORT: ${PHP_XDEBUG_CLIENT_PORT}
+    PHP_XDEBUG_IDE_KEY: ${PHP_XDEBUG_IDE_KEY}
+    PHP_XDEBUG_START_WITH_REQUEST: ${PHP_XDEBUG_START_WITH_REQUEST}
+    PHP_XDEBUG_DISCOVER_CLIENT_HOST: ${PHP_XDEBUG_DISCOVER_CLIENT_HOST}
+    PHP_XDEBUG_LOG: ${PHP_XDEBUG_LOG}
+    PHP_XDEBUG_LOG_LEVEL: ${PHP_XDEBUG_LOG_LEVEL}
+
+x-app-environment: &app-environment
+  PROJECT_NAME: ${PROJECT_NAME:-olx-price-watcher}
+  APP_ENV: ${APP_ENV}
+  APP_SECRET: ${APP_SECRET}
+  APP_BASE_URL: ${APP_BASE_URL}
+  POSTGRES_HOST: ${POSTGRES_HOST:-database}
+  POSTGRES_PORT: 5432
+  DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-database}:5432/${POSTGRES_DB}?serverVersion=16&charset=utf8"
+  MAILER_DSN: ${MAILER_DSN}
+  MAIL_FROM: ${MAIL_FROM}
+  OLX_CHECK_INTERVAL_FROM_SECONDS: ${OLX_CHECK_INTERVAL_FROM_SECONDS:-300}
+  OLX_CHECK_INTERVAL_TO_SECONDS: ${OLX_CHECK_INTERVAL_TO_SECONDS:-600}
+  OLX_UNAVAILABLE_NOTIFICATION_THRESHOLD: ${OLX_UNAVAILABLE_NOTIFICATION_THRESHOLD:-20}
+  OLX_HTTP_TIMEOUT_SECONDS: ${OLX_HTTP_TIMEOUT_SECONDS}
+  OLX_USER_AGENT: ${OLX_USER_AGENT}
+  SUBSCRIPTION_CONFIRMATION_TTL_HOURS: ${SUBSCRIPTION_CONFIRMATION_TTL_HOURS}
+  PHP_XDEBUG_MODE: ${PHP_XDEBUG_MODE}
+  PHP_XDEBUG_CLIENT_HOST: ${PHP_XDEBUG_CLIENT_HOST}
+  PHP_XDEBUG_CLIENT_PORT: ${PHP_XDEBUG_CLIENT_PORT}
+  PHP_XDEBUG_IDE_KEY: ${PHP_XDEBUG_IDE_KEY}
+  PHP_XDEBUG_START_WITH_REQUEST: ${PHP_XDEBUG_START_WITH_REQUEST}
+  PHP_XDEBUG_DISCOVER_CLIENT_HOST: ${PHP_XDEBUG_DISCOVER_CLIENT_HOST}
+  PHP_XDEBUG_LOG: ${PHP_XDEBUG_LOG}
+  PHP_XDEBUG_LOG_LEVEL: ${PHP_XDEBUG_LOG_LEVEL}
+  XDEBUG_CONFIG: "client_host=${PHP_XDEBUG_CLIENT_HOST} client_port=${PHP_XDEBUG_CLIENT_PORT} idekey=${PHP_XDEBUG_IDE_KEY}"
+
+x-php-service: &php-service
+  build: *php-build
+  environment: *app-environment
+  depends_on:
+    - database
+    - mailpit
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - .:/app
+    - vendor_data:/app/vendor
+
+services:
+  app:
+    <<: *php-service
+    container_name: "${PROJECT_NAME:-olx-price-watcher}-app"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "php -r \"exit(@file_get_contents('http://127.0.0.1:8000/health') === false ? 1 : 0);\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    <<: *php-service
+    container_name: "${PROJECT_NAME:-olx-price-watcher}-worker"
+    restart: unless-stopped
+    command: ["sh", "docker/worker/run.sh"]
+
+  database:
+    container_name: "${PROJECT_NAME:-olx-price-watcher}-database"
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - database_data:/var/lib/postgresql/data
+
+  mailpit:
+    container_name: "${PROJECT_NAME:-olx-price-watcher}-mailpit"
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"
+    expose:
+      - "1025"
+
+volumes:
+  database_data:
+    name: "${PROJECT_NAME:-olx-price-watcher}_database_data"
+  vendor_data:
+    name: "${PROJECT_NAME:-olx-price-watcher}_vendor_data"

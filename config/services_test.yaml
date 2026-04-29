@@ -1,0 +1,17 @@
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+    public: true
+
+  App\Tests\Support\:
+    resource: '../tests/Support/'
+
+  App\Domain\Listing\ListingRepositoryInterface: '@App\Tests\Support\InMemoryListingRepository'
+  App\Domain\Subscription\SubscriptionRepositoryInterface: '@App\Tests\Support\InMemorySubscriptionRepository'
+  App\Domain\Price\PriceFetcherInterface: '@App\Tests\Support\ConfigurablePriceFetcher'
+  App\Domain\Subscription\ConfirmationTokenGeneratorInterface: '@App\Tests\Support\SequentialTokenGenerator'
+  App\Application\PriceTracking\PriceHistoryRepositoryInterface: '@App\Tests\Support\InMemoryPriceHistoryRepository'
+  App\Application\Notification\NotifierInterface: '@App\Tests\Support\RecordingNotifier'
+  App\Shared\ClockInterface: '@App\Tests\Support\MutableClock'
+  App\Shared\SleeperInterface: '@App\Tests\Support\NoOpSleeper'

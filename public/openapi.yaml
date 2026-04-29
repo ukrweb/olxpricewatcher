@@ -1,0 +1,153 @@
+openapi: 3.0.3
+info:
+  title: OLX Price Watcher API
+  version: 1.0.0
+  description: Small API for confirming email subscriptions to OLX listing price changes.
+paths:
+  /api/subscriptions:
+    post:
+      summary: Create a pending subscription
+      description: Accepts an OLX listing URL and email address, stores a pending subscription, and sends a confirmation email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubscriptionRequest'
+      responses:
+        '201':
+          description: Subscription created and waiting for confirmation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiMessageResponse'
+        '200':
+          description: Subscription already exists or confirmation was resent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiMessageResponse'
+        '400':
+          description: Invalid JSON body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: OLX listing was not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Invalid email, invalid URL, price not found, or listing cannot be tracked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: OLX fetch or network error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected storage or application error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/subscriptions/confirm/{token}:
+    get:
+      summary: Confirm a subscription
+      description: Activates a pending subscription when the token exists and has not expired. If the token was already used, the endpoint returns already_confirmed.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Use the confirmation token from the Mailpit email. If the token was already used, the endpoint returns already_confirmed.
+      responses:
+        '200':
+          description: Subscription confirmed or already confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiMessageResponse'
+              examples:
+                confirmed:
+                  value:
+                    status: confirmed
+                    message: Subscription confirmed.
+                already_confirmed:
+                  value:
+                    status: already_confirmed
+                    message: Subscription is already confirmed.
+        '404':
+          description: Token was not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: Token has expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Service is reachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+components:
+  schemas:
+    CreateSubscriptionRequest:
+      type: object
+      required: [url, email]
+      properties:
+        url:
+          type: string
+          format: uri
+          example: https://m.olx.ua/d/uk/obyavlenie/example-IDtrack123.html
+        email:
+          type: string
+          format: email
+          example: subscriber@example.com
+    ApiMessageResponse:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          example: pending_confirmation
+        message:
+          type: string
+          example: Subscription created. Please confirm your email.
+    ErrorResponse:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: Unable to extract listing price.
